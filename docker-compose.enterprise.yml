@@ -1,0 +1,82 @@
+version: "3.9"
+
+# ── Enterprise overlay — extends docker-compose.yml ───────────────────────────
+# Usage: docker compose -f docker-compose.yml -f docker-compose.enterprise.yml up -d
+
+services:
+
+  diva-api:
+    environment:
+      Database__Provider: SqlServer
+      Database__SqlServer__ConnectionString: "Server=sqlserver,1433;Database=Diva;User Id=sa;Password=${SQL_SA_PASSWORD};TrustServerCertificate=true"
+      Database__SqlServer__UseRls: "true"
+      LLM__DirectProvider__Provider: OpenAI
+      LLM__DirectProvider__ApiKey: "${LITELLM_MASTER_KEY}"
+      LLM__DirectProvider__Endpoint: "http://litellm:4000/"
+      LLM__DirectProvider__Model: claude-sonnet
+      Seq__ServerUrl: "http://seq:5341"
+      OTel__Endpoint: "http://otel-collector:4317"
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+      litellm:
+        condition: service_started
+
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      SA_PASSWORD: "${SQL_SA_PASSWORD}"
+    ports:
+      - "1433:1433"
+    volumes:
+      - sql-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD", "/opt/mssql-tools/bin/sqlcmd", "-S", "localhost", "-U", "sa", "-P", "${SQL_SA_PASSWORD}", "-Q", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    ports:
+      - "4000:4000"
+    environment:
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY}"
+      DATABASE_URL: "postgresql://litellm:${LITELLM_DB_PASSWORD}@postgres:5432/litellm"
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+
+  seq:
+    image: datalust/seq:latest
+    ports:
+      - "5341:5341"
+      - "8081:80"
+    environment:
+      ACCEPT_EULA: "Y"
+    volumes:
+      - seq-data:/data
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "8888:8888"   # Prometheus metrics
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    command: ["--config=/etc/otel-collector-config.yaml"]
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: "${LITELLM_DB_PASSWORD}"
+      POSTGRES_DB: litellm
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+
+volumes:
+  sql-data:
+  seq-data:
+  pg-data:

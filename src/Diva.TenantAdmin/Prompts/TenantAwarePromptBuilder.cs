@@ -1,0 +1,209 @@
+using Diva.Core.Models;
+using Diva.Core.Prompts;
+using Diva.Infrastructure.Data.Entities;
+using Diva.Infrastructure.Learning;
+using Diva.TenantAdmin.Services;
+using Microsoft.Extensions.Logging;
+
+namespace Diva.TenantAdmin.Prompts;
+
+/// <summary>
+/// Builds system prompts augmented with tenant business rules, session rules, and prompt overrides.
+/// Also merges shared group rules and overrides when the tenant belongs to one or more groups.
+/// Injection order (lowest → highest priority):
+///   1. Group prompt overrides applied to base prompt first
+///   2. Tenant prompt overrides on top (tenant wins)
+///   3. ## Group Rules block  (Priority ≈ 50)
+///   4. ## Business Rules block (tenant, Priority ≈ 100)
+///   5. ## Session Rules block
+/// Implements IPromptBuilder (defined in Diva.Core) — injected into AnthropicAgentRunner.
+/// Singleton-safe: all dependencies use IDatabaseProviderFactory or IMemoryCache.
+/// </summary>
+public sealed class TenantAwarePromptBuilder : IPromptBuilder
+{
+    private readonly ITenantBusinessRulesService _rules;
+    private readonly ISessionRuleManager _sessionRules;
+    private readonly ITenantGroupService _groupService;
+    private readonly ILogger<TenantAwarePromptBuilder> _logger;
+
+    public TenantAwarePromptBuilder(
+        ITenantBusinessRulesService rules,
+        ISessionRuleManager sessionRules,
+        ITenantGroupService groupService,
+        ILogger<TenantAwarePromptBuilder> logger)
+    {
+        _rules        = rules;
+        _sessionRules = sessionRules;
+        _groupService = groupService;
+        _logger       = logger;
+    }
+
+    public async Task<string> BuildAsync(
+        string baseSystemPrompt,
+        string agentType,
+        TenantContext tenant,
+        CancellationToken ct,
+        string? customVariablesJson = null,
+        string? agentId = null)
+    {
+        var parts = new List<string> { baseSystemPrompt };
+
+        // Fetch all sources in parallel
+        // NOTE: Tenant business rules are intentionally excluded here — they now flow through
+        // TenantRulePackHook via RulePackEngine (BusinessRuleAdapter + virtual pack).
+        var tenantOverridesTask = _rules.GetPromptOverridesAsync(tenant.TenantId, agentType, ct, agentId);
+        var groupRulesTask     = _groupService.GetActiveRulesForTenantAsync(tenant.TenantId, agentType, ct);
+        var groupOverridesTask = _groupService.GetActiveOverridesForTenantAsync(tenant.TenantId, agentType, ct);
+        var sessionRulesTask   = tenant.SessionId is not null
+            ? _sessionRules.GetSessionRulesAsync(tenant.SessionId, ct)
+            : Task.FromResult(new List<SuggestedRule>());
+
+        await Task.WhenAll(tenantOverridesTask, groupRulesTask, groupOverridesTask, sessionRulesTask);
+
+        // 1. Apply group prompt overrides first (lower priority)
+        var groupOverrides = groupOverridesTask.Result;
+        if (groupOverrides.Count > 0)
+            parts[0] = ApplyGroupOverrides(parts[0], groupOverrides);
+
+        // 2. Apply tenant prompt overrides on top (tenant wins)
+        var tenantOverrides = tenantOverridesTask.Result;
+        if (tenantOverrides.Count > 0)
+            parts[0] = ApplyOverrides(parts[0], tenantOverrides);
+
+        // 3. ## Group Rules block (shared, lower priority — template rules excluded: they are opt-in at tenant level)
+        var groupRules = groupRulesTask.Result.Where(r => !r.IsTemplate).ToList();
+        if (groupRules.Count > 0)
+        {
+            var groupBlock = "## Group Rules\n\n" +
+                string.Join("\n", groupRules.Select(r => $"- {r.PromptInjection}"));
+            parts.Add(groupBlock);
+        }
+
+        // Tenant business rules are now injected via TenantRulePackHook / RulePackEngine.
+        // Session rules remain here (ephemeral; not hook-level evaluated).
+
+        // 4. ## Session Rules block
+        var sessionRuleList = sessionRulesTask.Result;
+        if (sessionRuleList.Count > 0)
+        {
+            var sessionBlock = "## Session Rules\n\n" +
+                string.Join("\n", sessionRuleList.Select(r => $"- {r.PromptInjection}"));
+            parts.Add(sessionBlock);
+        }
+
+        var result = string.Join("\n\n", parts);
+
+        // Resolve {{variable}} placeholders in the fully-assembled prompt.
+        // Precedence: customVars (admin-defined) > runtimeVars (per-request identity) > built-ins (date/time)
+        var customVars  = PromptVariableResolver.ParseJson(customVariablesJson, _logger);
+        var runtimeVars = BuildRuntimeVariables(tenant);
+        result = PromptVariableResolver.Resolve(result, customVars, runtimeVars, _logger);
+
+        _logger.LogDebug(
+            "Built prompt for agentType={AgentType} agentId={AgentId} tenant={TenantId}: {TotalLength} chars, " +
+            "{TenantOverrides} tenant overrides, {GroupOverrides} group overrides, {GroupRules} group rules",
+            agentType, agentId, tenant.TenantId, result.Length, tenantOverrides.Count, groupOverrides.Count, groupRules.Count);
+
+        return result;
+    }
+
+    /// <inheritdoc/>
+    public async Task<(string StaticPart, string DynamicPart)> BuildPartsAsync(
+        string baseSystemPrompt,
+        string agentType,
+        TenantContext tenant,
+        CancellationToken ct,
+        string? customVariablesJson = null,
+        string? agentId = null)
+    {
+        // Fetch all sources in parallel (same as BuildAsync)
+        var tenantOverridesTask = _rules.GetPromptOverridesAsync(tenant.TenantId, agentType, ct, agentId);
+        var groupRulesTask      = _groupService.GetActiveRulesForTenantAsync(tenant.TenantId, agentType, ct);
+        var groupOverridesTask  = _groupService.GetActiveOverridesForTenantAsync(tenant.TenantId, agentType, ct);
+        var sessionRulesTask    = tenant.SessionId is not null
+            ? _sessionRules.GetSessionRulesAsync(tenant.SessionId, ct)
+            : Task.FromResult(new List<SuggestedRule>());
+
+        await Task.WhenAll(tenantOverridesTask, groupRulesTask, groupOverridesTask, sessionRulesTask);
+
+        // ── Static part (stable across sessions for same agent+tenant) ─────────
+        var staticParts = new List<string> { baseSystemPrompt };
+
+        var groupOverrides = groupOverridesTask.Result;
+        if (groupOverrides.Count > 0)
+            staticParts[0] = ApplyGroupOverrides(staticParts[0], groupOverrides);
+
+        var tenantOverrides = tenantOverridesTask.Result;
+        if (tenantOverrides.Count > 0)
+            staticParts[0] = ApplyOverrides(staticParts[0], tenantOverrides);
+
+        var groupRules = groupRulesTask.Result.Where(r => !r.IsTemplate).ToList();
+        if (groupRules.Count > 0)
+            staticParts.Add("## Group Rules\n\n" +
+                string.Join("\n", groupRules.Select(r => $"- {r.PromptInjection}")));
+
+        var staticResult = string.Join("\n\n", staticParts);
+        var customVars   = PromptVariableResolver.ParseJson(customVariablesJson, _logger);
+        var runtimeVars  = BuildRuntimeVariables(tenant);
+        staticResult     = PromptVariableResolver.Resolve(staticResult, customVars, runtimeVars, _logger);
+
+        // ── Dynamic part (changes per session) ────────────────────────────────────────────
+        var sessionRuleList = sessionRulesTask.Result;
+        var dynamicResult   = sessionRuleList.Count > 0
+            ? PromptVariableResolver.Resolve(
+                "## Session Rules\n\n" +
+                string.Join("\n", sessionRuleList.Select(r => $"- {r.PromptInjection}")),
+                customVars, runtimeVars, _logger)
+            : string.Empty;
+
+        _logger.LogDebug(
+            "BuildPartsAsync for agentType={AgentType} agentId={AgentId} tenant={TenantId}: " +
+            "static={StaticLength} chars, dynamic={DynamicLength} chars",
+            agentType, agentId, tenant.TenantId, staticResult.Length, dynamicResult.Length);
+
+        return (staticResult, dynamicResult);
+    }
+
+    /// <summary>
+    /// Builds per-request runtime variables from TenantContext for {{variable}} substitution.
+    /// These are available in all agent system prompts without any admin configuration.
+    /// Precedence: customVariables (agent-level admin config) wins over these at resolve time.
+    /// </summary>
+    private static IReadOnlyDictionary<string, string> BuildRuntimeVariables(TenantContext tenant)
+        => new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["user_id"]     = tenant.UserId,
+            ["user_email"]  = tenant.UserEmail,
+            ["user_name"]   = tenant.UserName,
+            ["tenant_id"]   = tenant.TenantId.ToString(),
+            ["tenant_name"] = tenant.TenantName,
+        };
+
+    private static string ApplyGroupOverrides(string prompt, List<GroupPromptOverrideEntity> overrides)
+    {
+        foreach (var o in overrides.OrderBy(x => x.Id))
+        {
+            prompt = o.MergeMode switch
+            {
+                "Replace" => o.CustomText,
+                "Prepend" => o.CustomText + "\n\n" + prompt,
+                _         => prompt + "\n\n" + o.CustomText,   // "Append" (default)
+            };
+        }
+        return prompt;
+    }
+
+    private static string ApplyOverrides(string prompt, List<TenantPromptOverrideEntity> overrides)
+    {
+        foreach (var o in overrides.OrderBy(x => x.Version))
+        {
+            prompt = o.MergeMode switch
+            {
+                "Replace" => o.CustomText,
+                "Prepend" => o.CustomText + "\n\n" + prompt,
+                _         => prompt + "\n\n" + o.CustomText,   // "Append" (default)
+            };
+        }
+        return prompt;
+    }
+}

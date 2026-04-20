@@ -1,0 +1,84 @@
+site_name: Diva AI — Agent Architecture
+site_description: Architecture documentation for the Diva AI multi-tenant enterprise agent platform
+site_url: https://yourusername.github.io/diva-ai/
+repo_url: https://github.com/yourusername/diva-ai
+repo_name: diva-ai
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: deep purple
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: deep purple
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.tabs.link
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+  - tables
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: index.md
+  - Platform Overview: overview.md
+  - Core Concepts:
+    - Agent Execution Model: core/react-loop.md
+    - Supervisor Pipeline: core/supervisor-pipeline.md
+    - Agents-as-Tools Delegation: core/agent-delegation.md
+    - A2A Protocol: core/a2a-protocol.md
+    - Agent Archetypes: core/archetypes.md
+    - Lifecycle Hooks: core/lifecycle-hooks.md
+  - Tool Integration:
+    - MCP Tools: tools/mcp-integration.md
+    - Parallel Execution & Timeouts: tools/parallel-execution.md
+  - Quality & Safety:
+    - Response Verification: quality/verification.md
+    - Context Window Management: quality/context-management.md
+  - Real-Time Streaming:
+    - SSE Events & Streaming: streaming/sse-events.md
+  - Multi-Tenancy:
+    - Tenant-Aware Agents: tenancy/tenant-aware-agents.md
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/yourusername/diva-ai

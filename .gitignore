@@ -1,0 +1,36 @@
+# Build outputs
+**/bin/
+**/obj/
+
+# Test and coverage artifacts
+TestResults/
+coverage/
+coverage-*/
+*.coverage
+*.coveragexml
+
+# IDE and editor state
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Logs and temp files
+*.log
+*.tmp
+*.cache
+
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Config overrides with secrets (use appsettings.Development.example.json as template)
+appsettings.Development.json
+!appsettings.Development.example.json
+
+# Local databases
+*.db
+*.db-shm
+*.db-wal

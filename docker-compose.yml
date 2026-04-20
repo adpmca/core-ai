@@ -1,0 +1,52 @@
+version: "3.9"
+
+# ── Dev stack (SQLite, no LiteLLM, no telemetry) ─────────────────────────────
+services:
+
+  diva-api:
+    build: .
+    ports:
+      - "8090:8080"    # Docker: 8090 — local dev stays on 8080
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Database__Provider: SQLite
+      Database__SQLite__ConnectionString: "Data Source=/data/diva.db"
+      # SessionTrace: persisted to the same /data volume so it survives container restarts
+      ConnectionStrings__SessionTrace: "Data Source=/data/sessions-trace.db"
+      LLM__UseLiteLLM: "false"
+      LLM__DirectProvider__Provider: Anthropic
+      LLM__DirectProvider__ApiKey: "${ANTHROPIC_API_KEY}"
+      LLM__DirectProvider__Model: claude-sonnet-4-6
+      AdminPortal__CorsOrigin: "${PORTAL_ORIGIN:-http://localhost:5173}"
+      Verification__Mode: LlmVerifier
+      Verification__ConfidenceThreshold: "0.5"
+      Agent__MaxIterations: "10"
+      Agent__LlmStreamIdleTimeoutSeconds: "${AGENT_LLM_STREAM_IDLE_TIMEOUT_SECONDS:-300}"
+      Agent__LlmTimeoutSeconds: "${AGENT_LLM_TIMEOUT_SECONDS:-300}"
+      Agent__RuleLearning__ApprovalMode: RequireAdmin
+      Agent__RuleLearning__ConfidenceThreshold: "0.8"
+      # Credentials vault master key — MUST be a stable base64-encoded 32-byte key.
+      # If not set, an ephemeral key is generated per startup and all stored MCP
+      # credentials become unrecoverable after restart.
+      # Generate with: openssl rand -base64 32
+      Credentials__MasterKey: "${CREDENTIALS_MASTER_KEY}"
+      A2A__Enabled: "true"
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  diva-portal:
+    build: ./admin-portal
+    ports:
+      - "3000:80"      # Docker: 3000 — local dev stays on 5173
+    depends_on:
+      diva-api:
+        condition: service_healthy
+    restart: unless-stopped
+
+# No named volumes — /data is bind-mounted to ./data on the host

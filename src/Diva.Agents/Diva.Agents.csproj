@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Diva.Core\Diva.Core.csproj" />
+    <ProjectReference Include="..\Diva.Infrastructure\Diva.Infrastructure.csproj" />
+    <ProjectReference Include="..\Diva.TenantAdmin\Diva.TenantAdmin.csproj" />
+    <ProjectReference Include="..\Diva.Tools\Diva.Tools.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.SemanticKernel" Version="1.*" />
+    <PackageReference Include="Microsoft.SemanticKernel.Agents.Core" Version="1.*" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>
