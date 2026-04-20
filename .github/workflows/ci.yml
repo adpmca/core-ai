@@ -18,7 +18,7 @@ jobs:
       - run: dotnet restore Diva.slnx
       - run: dotnet build Diva.slnx -c Release --no-restore
       - run: dotnet test Diva.slnx --no-build -c Release --logger "trx;LogFileName=results.trx"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: test-results
