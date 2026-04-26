@@ -103,25 +103,6 @@ export function TenantList() {
   const f = (field: keyof CreateTenantDto, v: string) =>
     setForm(prev => ({ ...prev, [field]: v }));
 
-  const FormFields = () => (
-    <div className="space-y-3 py-2">
-      <div className="space-y-1">
-        <Label>Organization Name</Label>
-        <Input value={form.name} onChange={e => f("name", e.target.value)} placeholder="Acme Corp" />
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1">
-          <Label>LiteLLM Team ID <span className="text-muted-foreground text-xs">(optional)</span></Label>
-          <Input value={form.liteLLMTeamId ?? ""} onChange={e => f("liteLLMTeamId", e.target.value)} />
-        </div>
-        <div className="space-y-1">
-          <Label>LiteLLM Team Key <span className="text-muted-foreground text-xs">(optional)</span></Label>
-          <Input type="password" value={form.liteLLMTeamKey ?? ""} onChange={e => f("liteLLMTeamKey", e.target.value)} />
-        </div>
-      </div>
-    </div>
-  );
-
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
@@ -189,7 +170,22 @@ export function TenantList() {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>New Tenant</DialogTitle></DialogHeader>
-          <FormFields />
+          <div className="space-y-3 py-2">
+            <div className="space-y-1">
+              <Label>Organization Name</Label>
+              <Input value={form.name} onChange={e => f("name", e.target.value)} placeholder="Acme Corp" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>LiteLLM Team ID <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                <Input value={form.liteLLMTeamId ?? ""} onChange={e => f("liteLLMTeamId", e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label>LiteLLM Team Key <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                <Input type="password" value={form.liteLLMTeamKey ?? ""} onChange={e => f("liteLLMTeamKey", e.target.value)} />
+              </div>
+            </div>
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
             <Button onClick={create} disabled={saving || !form.name}>{saving ? "Creating…" : "Create"}</Button>
@@ -201,7 +197,22 @@ export function TenantList() {
       <Dialog open={!!editTenant} onOpenChange={v => { if (!v) setEditTenant(null); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>Edit Tenant — {editTenant?.name}</DialogTitle></DialogHeader>
-          <FormFields />
+          <div className="space-y-3 py-2">
+            <div className="space-y-1">
+              <Label>Organization Name</Label>
+              <Input value={form.name} onChange={e => f("name", e.target.value)} placeholder="Acme Corp" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>LiteLLM Team ID <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                <Input value={form.liteLLMTeamId ?? ""} onChange={e => f("liteLLMTeamId", e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label>LiteLLM Team Key <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                <Input type="password" value={form.liteLLMTeamKey ?? ""} onChange={e => f("liteLLMTeamKey", e.target.value)} />
+              </div>
+            </div>
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditTenant(null)}>Cancel</Button>
             <Button onClick={update} disabled={saving || !form.name}>{saving ? "Saving…" : "Save"}</Button>

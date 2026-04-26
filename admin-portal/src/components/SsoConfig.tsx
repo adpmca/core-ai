@@ -53,7 +53,7 @@ export function SsoConfig({ tenantId = 1 }: { tenantId?: number }) {
           <Shield className="size-5" />
           <h1 className="text-2xl font-semibold">SSO Configuration</h1>
         </div>
-        <Button onClick={() => navigate("new")}><Plus className="size-4 mr-2" /> Add Provider</Button>
+        <Button onClick={() => navigate(`/settings/sso/new${tenantId !== 1 ? `?tenantId=${tenantId}` : ""}`)}><Plus className="size-4 mr-2" /> Add Provider</Button>
       </div>
 
       <Card>
@@ -85,7 +85,7 @@ export function SsoConfig({ tenantId = 1 }: { tenantId?: number }) {
                   </TableCell>
                   <TableCell>
                     <div className="flex gap-1">
-                      <Button size="icon" variant="ghost" onClick={() => navigate(`${c.id}/edit`)}><Pencil className="size-4" /></Button>
+                      <Button size="icon" variant="ghost" onClick={() => navigate(`/settings/sso/${c.id}/edit${tenantId !== 1 ? `?tenantId=${tenantId}` : ""}`)}><Pencil className="size-4" /></Button>
                       <Button size="icon" variant="ghost" className="text-destructive" onClick={() => del(c)}><Trash2 className="size-4" /></Button>
                     </div>
                   </TableCell>

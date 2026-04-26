@@ -179,7 +179,7 @@ public sealed class TenantContextMiddleware
 
         // Upsert user profile asynchronously (non-fatal)
         try { await loginTracker.UpsertOnLoginAsync(tenantContext, context.RequestAborted); }
-        catch (Exception ex) { _logger.LogWarning(ex, "User profile upsert failed (non-fatal)"); }
+        catch (Exception ex) { _logger.LogError(ex, "User profile upsert failed for tenant={TenantId} user={UserId}", tenantContext.TenantId, tenantContext.UserId); }
 
         await _next(context);
     }

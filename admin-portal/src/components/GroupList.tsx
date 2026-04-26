@@ -102,19 +102,6 @@ export function GroupList() {
   const f = (field: keyof CreateDto, v: string) =>
     setForm(prev => ({ ...prev, [field]: v }));
 
-  const FormFields = () => (
-    <div className="space-y-3 py-2">
-      <div className="space-y-1">
-        <Label>Group Name</Label>
-        <Input value={form.name} onChange={e => f("name", e.target.value)} placeholder="e.g. Enterprise Accounts" />
-      </div>
-      <div className="space-y-1">
-        <Label>Description <span className="text-muted-foreground text-xs">(optional)</span></Label>
-        <Input value={form.description} onChange={e => f("description", e.target.value)} placeholder="Shared configuration for…" />
-      </div>
-    </div>
-  );
-
   return (
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
@@ -184,7 +171,16 @@ export function GroupList() {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>New Group</DialogTitle></DialogHeader>
-          <FormFields />
+          <div className="space-y-3 py-2">
+            <div className="space-y-1">
+              <Label>Group Name</Label>
+              <Input value={form.name} onChange={e => f("name", e.target.value)} placeholder="e.g. Enterprise Accounts" />
+            </div>
+            <div className="space-y-1">
+              <Label>Description <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Input value={form.description} onChange={e => f("description", e.target.value)} placeholder="Shared configuration for…" />
+            </div>
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
             <Button onClick={create} disabled={saving || !form.name}>{saving ? "Creating…" : "Create"}</Button>
@@ -196,7 +192,16 @@ export function GroupList() {
       <Dialog open={!!editGroup} onOpenChange={v => { if (!v) setEditGroup(null); }}>
         <DialogContent>
           <DialogHeader><DialogTitle>Edit Group — {editGroup?.name}</DialogTitle></DialogHeader>
-          <FormFields />
+          <div className="space-y-3 py-2">
+            <div className="space-y-1">
+              <Label>Group Name</Label>
+              <Input value={form.name} onChange={e => f("name", e.target.value)} placeholder="e.g. Enterprise Accounts" />
+            </div>
+            <div className="space-y-1">
+              <Label>Description <span className="text-muted-foreground text-xs">(optional)</span></Label>
+              <Input value={form.description} onChange={e => f("description", e.target.value)} placeholder="Shared configuration for…" />
+            </div>
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditGroup(null)}>Cancel</Button>
             <Button onClick={update} disabled={saving || !form.name}>{saving ? "Saving…" : "Save"}</Button>

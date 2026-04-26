@@ -6,7 +6,7 @@
  *   /settings/sso/:id/edit  — edit an existing provider
  */
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 import { api, type CreateSsoConfigDto } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -54,6 +54,9 @@ const emptyForm: CreateSsoConfigDto = {
 export function SsoConfigEditor({ tenantId = 1 }: { tenantId?: number }) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  // Platform admin passes tenantId as a query param when navigating from TenantDetail
+  const effectiveTenantId = Number(searchParams.get("tenantId") || tenantId);
   const isEdit = Boolean(id);
 
   const [form, setForm] = useState<CreateSsoConfigDto>(emptyForm);
@@ -66,7 +69,7 @@ export function SsoConfigEditor({ tenantId = 1 }: { tenantId?: number }) {
 
   useEffect(() => {
     if (!isEdit || !id) return;
-    api.getSsoConfig(Number(id), tenantId)
+    api.getSsoConfig(Number(id), effectiveTenantId)
       .then(c => setForm({
         providerName: c.providerName,
         issuer: c.issuer,
@@ -89,16 +92,16 @@ export function SsoConfigEditor({ tenantId = 1 }: { tenantId?: number }) {
       }))
       .catch(() => toast.error("Failed to load SSO config"))
       .finally(() => setLoading(false));
-  }, [id, isEdit, tenantId]);
+  }, [id, isEdit, effectiveTenantId]);
 
   async function save() {
     setSaving(true);
     try {
       if (isEdit && id) {
-        await api.updateSsoConfig(Number(id), { ...form, isActive: true }, tenantId);
+        await api.updateSsoConfig(Number(id), { ...form, isActive: true }, effectiveTenantId);
         toast.success("SSO config updated");
       } else {
-        await api.createSsoConfig(form, tenantId);
+        await api.createSsoConfig(form, effectiveTenantId);
         toast.success("SSO config created");
       }
       navigate("/settings/sso");
