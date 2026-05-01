@@ -7,9 +7,10 @@ services:
     build: .
     env_file: .env
     ports:
-      - "8010:8080"    # Docker: 8010 — local dev stays on 8080
+      - "6032:6032"
     environment:
       ASPNETCORE_ENVIRONMENT: Development
+      ASPNETCORE_URLS: "http://+:6032"
       Database__Provider: SQLite
       Database__SQLite__ConnectionString: "Data Source=/data/diva.db"
       # SessionTrace: persisted to the same /data volume so it survives container restarts
@@ -18,7 +19,7 @@ services:
       LLM__DirectProvider__Provider: Anthropic
       LLM__DirectProvider__ApiKey: "${ANTHROPIC_API_KEY}"
       LLM__DirectProvider__Model: claude-sonnet-4-6
-      AdminPortal__CorsOrigin: "${PORTAL_ORIGIN:-http://localhost:5173}"
+      AdminPortal__CorsOrigin: "${PORTAL_ORIGIN:-http://localhost:6010}"
       Verification__Mode: LlmVerifier
       Verification__ConfidenceThreshold: "0.5"
       Agent__MaxIterations: "10"
@@ -31,13 +32,18 @@ services:
       # credentials become unrecoverable after restart.
       # Generate with: openssl rand -base64 32
       Credentials__MasterKey: "${CREDENTIALS_MASTER_KEY}"
-      LocalAuth__SigningKey: "${LOCAL_AUTH_SIGNING_KEY}"
-      OAuth__Enabled: "true"
       A2A__Enabled: "true"
+      # Auth — set OAuth__Enabled=true to enforce JWT auth and enable user profile creation
+      OAuth__Enabled: "${OAUTH_ENABLED:-false}"
+      LocalAuth__SigningKey: "${LOCAL_AUTH_SIGNING_KEY:-change-me-in-production-must-be-32-chars!!}"
+      AppBranding__ProductName: "${AppBranding__ProductName:-Diva AI}"
+      AppBranding__Slug: "${AppBranding__Slug:-diva}"
+      AppBranding__ApiAudience: "${AppBranding__ApiAudience:-diva-api}"
+      AppBranding__LocalIssuer: "${AppBranding__LocalIssuer:-diva-local}"
     volumes:
       - ./data:/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health/live"]
+      test: ["CMD", "curl", "-f", "http://localhost:6032/health/live"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -47,10 +53,10 @@ services:
     build:
       context: ./admin-portal
       args:
-        VITE_API_URL: "http://localhost:8010"
-        VITE_AUTH_ENABLED: "true"
+        VITE_APP_NAME: "${VITE_APP_NAME:-Diva AI}"
+        VITE_APP_SLUG: "${VITE_APP_SLUG:-diva}"
     ports:
-      - "3010:80"      # Docker: 3010 — local dev stays on 5173
+      - "6010:6010"
     depends_on:
       diva-api:
         condition: service_healthy

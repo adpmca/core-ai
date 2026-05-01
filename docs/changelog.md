@@ -126,6 +126,45 @@ calling Anthropic vision API (`claude-haiku-4-5-20251001`) with configurable cat
 
 ---
 
+## [2026-04-22] Dev Docker Environment, Auth & UI Fixes
+
+### Docker / Deployment
+
+Established a complete dev Docker environment with proper port configuration, branding, and auth support.
+
+| File | Change |
+|------|--------|
+| `.env` | New — dev secrets: `ANTHROPIC_API_KEY`, `CREDENTIALS_MASTER_KEY`, `PORTAL_ORIGIN`, `AppBranding__*`, `VITE_APP_NAME/SLUG`, `OAUTH_ENABLED=true`, `LOCAL_AUTH_SIGNING_KEY` |
+| `.env.prod` | New — production template (gitignored); SQL Server provider, real OAuth endpoints, stable key placeholders |
+| `docker-compose.yml` | Fixed ports (`6032` API, `6010` portal); added `ASPNETCORE_URLS: http://+:6032`; portal `build.args` for Vite branding vars; added `OAuth__Enabled`, `LocalAuth__SigningKey`, and `AppBranding__*` env vars wired from `.env` |
+| `admin-portal/Dockerfile` | Added `ARG VITE_APP_NAME` / `ARG VITE_APP_SLUG`; passes them to `npm run build` so branding is baked in at image build time |
+| `admin-portal/nginx.conf` | Changed `listen` to `6010`; `proxy_pass` to `http://diva-api:6032`; added SSE proxy with `proxy_read_timeout 600s`; SPA fallback |
+
+### Auth
+
+| File | Change |
+|------|--------|
+| `admin-portal/src/lib/auth.ts` | `AUTH_ENABLED` default flipped from opt-in (`=== "true"`) to opt-out (`!== "false"`) — unauthenticated Docker builds now enforce login |
+| `admin-portal/src/api.ts` | Added 401 interceptor in `request()` — on 401 clears localStorage token and redirects to `/login` |
+
+### UI Bug Fixes
+
+| File | Change |
+|------|--------|
+| `admin-portal/src/components/SsoConfig.tsx` | Fixed Add Provider button: changed from relative `navigate("new")` to absolute path `/settings/sso/new?tenantId=N` so it resolves correctly from `/platform/tenants/:id` |
+| `admin-portal/src/components/SsoConfigEditor.tsx` | Added `useSearchParams`; reads `effectiveTenantId` from `?tenantId` query param so platform admins can configure SSO for any tenant |
+| `admin-portal/src/components/GroupList.tsx` | Fixed focus loss in Create/Edit dialogs: removed `FormFields` arrow function component (caused React to unmount inputs on every render); JSX inlined directly into dialog bodies |
+| `admin-portal/src/components/TenantList.tsx` | Same focus-loss fix as GroupList |
+
+### User Profiles
+
+| File | Change |
+|------|--------|
+| `admin-portal/src/components/UserProfiles.tsx` | Replaced hardcoded `TENANT_ID = 1` with `auth.getTenantId()` read per render; improved empty state message explaining that profiles are auto-created on first login |
+| `src/Diva.Infrastructure/Auth/TenantContextMiddleware.cs` | `UpsertOnLoginAsync` catch block elevated from `LogWarning` to `LogError` with tenant/user context so profile creation failures are visible in production logs |
+
+---
+
 ## [2026-04-20] Embeddable Chat Widget
 
 Full embeddable chat widget feature spanning backend, widget SPA, admin UI, and tests.

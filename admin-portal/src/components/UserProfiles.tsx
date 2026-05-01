@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { api, type UserProfile, type UpdateUserProfileDto } from "@/api";
+import { auth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,13 +14,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Users, Search } from "lucide-react";
 import { toast } from "sonner";
 
-const TENANT_ID = 1;
-
 function initials(name: string) {
   return name.split(" ").map(p => p[0]).join("").toUpperCase().slice(0, 2);
 }
 
 export function UserProfiles() {
+  // Re-read per render so master admin navigating between tenants gets the right scope
+  const tenantId = auth.getTenantId() || 1;
   const [profiles, setProfiles] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -29,7 +30,7 @@ export function UserProfiles() {
 
   async function load() {
     try {
-      setProfiles(await api.listUserProfiles(TENANT_ID, search || undefined));
+      setProfiles(await api.listUserProfiles(tenantId, search || undefined));
     } catch (e) {
       toast.error(`Failed to load profiles: ${e}`);
     } finally {
@@ -61,7 +62,7 @@ export function UserProfiles() {
         ...form,
         avatarUrl: form.avatarUrl || undefined,
         metadataJson: form.metadataJson || undefined,
-      }, TENANT_ID);
+      }, tenantId);
       toast.success("Profile updated");
       setEditing(null);
       load();
@@ -74,8 +75,8 @@ export function UserProfiles() {
 
   async function toggleActive(p: UserProfile) {
     try {
-      if (p.isActive) await api.disableUser(p.id, TENANT_ID);
-      else await api.enableUser(p.id, TENANT_ID);
+      if (p.isActive) await api.disableUser(p.id, tenantId);
+      else await api.enableUser(p.id, tenantId);
       load();
     } catch (e) {
       toast.error(`Update failed: ${e}`);
