@@ -25,6 +25,9 @@ using Diva.TenantAdmin.Prompts;
 using Diva.TenantAdmin.Services;
 using Diva.TenantAdmin.Services.Enrichers;
 using Diva.Tools.Core;
+using Diva.Tools.FileSystem;
+using Diva.Tools.FileSystem.Abstractions;
+using Diva.Tools.FileSystem.Readers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
@@ -169,6 +172,20 @@ builder.Services.AddSingleton<IUserLoginTracker>(sp => sp.GetRequiredService<Use
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<McpHeaderPropagator>();
 builder.Services.AddScoped<TenantAwareMcpClient>();
+
+// ── MCP Server — Phase 23 ─────────────────────────────────────────────────
+builder.Services.Configure<FileSystemOptions>(
+    builder.Configuration.GetSection(FileSystemOptions.SectionName));
+builder.Services.AddSingleton<IValidateOptions<FileSystemOptions>, FileSystemOptionsValidator>();
+builder.Services.AddScoped<IFileSystemPathGuard, FileSystemPathGuard>();
+builder.Services.AddScoped<IToolFilter, ToolFilter>();
+builder.Services.AddScoped<IPdfReader, PdfReader>();
+builder.Services.AddScoped<IImageReader, ImageReader>();
+builder.Services
+    .AddMcpServer(opts => opts.ServerInfo = new() { Name = "diva-mcp", Version = "1.0" })
+    .WithHttpTransport()
+    .WithDivaMcpTools<FileSystemMcpTools>();
+// Phase 5 future: .WithDivaMcpTools<AnalyticsMcpTools>()
 
 // ── Agents ─────────────────────────────────────────────────────────────────
 builder.Services.AddSingleton<AgentSessionService>();
@@ -349,6 +366,7 @@ app.UseAuthorization();
 // ── Endpoints ─────────────────────────────────────────────────────────────
 app.MapControllers();
 app.MapHub<AgentStreamHub>("/hubs/agent");
+app.MapMcp("/mcp/diva").RequireAuthorization();
 
 app.MapHealthChecks("/health/live",  new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions { Predicate = _ => false });
 app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions());

@@ -42,7 +42,25 @@
       "Bash(curl -s -X POST http://localhost:5062/api/supervisor/invoke -H \"Content-Type: application/json\" -d '{\"\"query\"\":\"\"hello, what can you do?\"\"}')",
       "Bash(powershell -Command \"Get-Process node -ErrorAction SilentlyContinue | Where-Object { $_MainWindowTitle -eq '''' } | Stop-Process -Force\")",
       "Bash(powershell -Command \"Get-Process node -ErrorAction SilentlyContinue | Stop-Process -Force\")",
-      "Bash(curl -s http://localhost:5062/health/ready)"
+      "Bash(curl -s http://localhost:5062/health/ready)",
+      "Bash(dotnet script *)",
+      "Bash(python3 -)",
+      "Bash(powershell.exe -NoProfile *)",
+      "Bash(dotnet publish *)",
+      "Bash(Jwt__SigningKey=\"diva-fs-mcp-default-dev-key-32chars!!\" dotnet run --project tools/DivaFsMcpServer -- --http --urls http://localhost:8811)",
+      "Bash(echo \"PID: $!\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8811/auth/token)",
+      "Bash(curl -s http://localhost:8010/health/live)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3010)",
+      "Bash(curl -s http://localhost:8010/health/ready)",
+      "Bash(curl -s http://localhost:8010/health)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" -X POST http://localhost:8010/api/auth/login -H \"Content-Type: application/json\" -d '{\"username\":\"test\",\"password\":\"test\"}')",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" -X POST http://localhost:8010/api/auth/login/local -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"password\":\"admin\"}')",
+      "Bash(curl -s -X GET http://localhost:8010/api/auth/login -w \"\\\\nHTTP %{http_code}\")",
+      "Bash(curl -s http://localhost:8010/api/auth/setup)",
+      "Bash(curl -s http://localhost:8010/api/auth/providers)",
+      "Bash(curl -s http://localhost:8010/api/agents -o /dev/null -w \"%{http_code}\")",
+      "Bash(curl -s http://localhost:8010/api/admin/tenants -o /dev/null -w \"%{http_code}\")"
     ]
   }
 }

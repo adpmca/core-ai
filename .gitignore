@@ -26,6 +26,12 @@ coverage-*/
 .env.*
 !.env.example
 
+# SQLite data directory (bind-mounted in Docker / local dev)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/*.db-journal
+
 # Config overrides with secrets (use appsettings.Development.example.json as template)
 appsettings.Development.json
 !appsettings.Development.example.json
@@ -34,3 +40,6 @@ appsettings.Development.json
 *.db
 *.db-shm
 *.db-wal
+
+# Published build outputs
+publish/

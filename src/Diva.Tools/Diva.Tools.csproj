@@ -2,12 +2,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Diva.Core\Diva.Core.csproj" />
-    <ProjectReference Include="..\Diva.Infrastructure\Diva.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol" Version="1.1.0" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="1.1.0" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="3.*" />
+    <PackageReference Include="PdfPig" Version="0.*" />
   </ItemGroup>
 
   <PropertyGroup>

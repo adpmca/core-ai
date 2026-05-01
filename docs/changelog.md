@@ -4,6 +4,128 @@
 
 ---
 
+## [2026-04-30] Phase 23.1 — Standalone MCP Server JWT Authentication
+
+Upgraded `DivaFsMcpServer` from plaintext static-key comparison to a proper JWT client-credentials
+flow. The static `StandaloneApiKey` becomes a one-time master credential used to obtain short-lived
+JWTs (default 60 min, HMAC-SHA256). All MCP calls use `Authorization: Bearer <jwt>`. Static key
+fallback preserved for backward compatibility and for Diva platform agents that inject credentials
+directly via `CredentialRef`. 14 new tests (8 unit, 5 integration via WebApplicationFactory).
+
+### New files
+
+| File | Description |
+|------|-------------|
+| `tools/DivaFsMcpServer/Auth/StandaloneJwtOptions.cs` | JWT config: SigningKey, Issuer, Audience, TokenExpiryMinutes |
+| `tools/DivaFsMcpServer/Auth/StandaloneTokenService.cs` | Issues + validates HMAC-SHA256 JWTs (follows LocalAuthService pattern) |
+| `tools/DivaFsMcpServer/StandaloneAuthMiddleware.cs` | Replaces StandaloneApiKeyMiddleware; accepts JWT or static key |
+| `tests/DivaFsMcpServer.Tests/Auth/StandaloneTokenServiceTests.cs` | 9 unit tests |
+| `tests/DivaFsMcpServer.Tests/Auth/AuthEndpointTests.cs` | 5 integration tests via WebApplicationFactory |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `tools/DivaFsMcpServer/Program.cs` | Register StandaloneJwtOptions + StandaloneTokenService; add `POST /auth/token` endpoint; expose `public partial class Program` for tests |
+| `tools/DivaFsMcpServer/DivaFsMcpServer.csproj` | Add `System.IdentityModel.Tokens.Jwt 8.*` |
+| `tools/DivaFsMcpServer/appsettings.json` | Add `Jwt` section with defaults |
+| `Diva.slnx` | Add `tests/DivaFsMcpServer.Tests` |
+
+### Auth flow
+
+```
+# Get JWT (once)
+POST /auth/token  {"apiKey": "master-secret"}
+→ {"access_token":"eyJ...","expires_in":3600,"token_type":"Bearer"}
+
+# Use JWT on all MCP calls
+POST /mcp  Authorization: Bearer eyJ...
+```
+
+JWT disabled by default (`Jwt:SigningKey` empty) — static key auth unchanged until opt-in.
+
+---
+
+## [2026-04-30] Phase 23 — MCP Server Framework + FileSystem MCP Server
+
+Reusable MCP server development framework and FileSystem MCP server with 12 tools (text, PDF,
+image), SOLID-compliant design (4 interfaces, DIP throughout), two hosting modes (embedded + standalone),
+and 61 passing tests.
+
+### Architecture
+
+`IDivaMcpToolType` + `WithDivaMcpTools<T>()` extension pair provides a zero-boilerplate pattern for
+adding new MCP tool groups to Diva's shared MCP server (or standalone server). Each tool class is
+Scoped in DI so it can access request context. `McpServerContext.FromHttpContext` returns
+`Anonymous` when no HttpContext is present (stdio transport) — both embedded and standalone mode
+work transparently.
+
+`FileSystemMcpTools` is a thin MCP facade only — all logic delegates to interfaces:
+`IFileSystemPathGuard` (security), `IToolFilter` (availability), `IPdfReader` (PdfPig),
+`IImageReader` (ImageSharp blur/exposure/EXIF).
+
+### New files
+
+| File | Description |
+|------|-------------|
+| `src/Diva.Tools/Core/McpServerContext.cs` | Framework: tenant extractor + Anonymous fallback |
+| `src/Diva.Tools/Core/McpServerRegistration.cs` | `IDivaMcpToolType`, `WithDivaMcpTools<T>()` |
+| `src/Diva.Tools/FileSystem/FileSystemOptions.cs` | Config with per-tool/type flags, limits, image opts |
+| `src/Diva.Tools/FileSystem/FileSystemOptionsValidator.cs` | `IValidateOptions<FileSystemOptions>` startup check |
+| `src/Diva.Tools/FileSystem/Abstractions/IFileSystemPathGuard.cs` | Path validation contract |
+| `src/Diva.Tools/FileSystem/Abstractions/IToolFilter.cs` | Tool availability contract |
+| `src/Diva.Tools/FileSystem/Abstractions/IPdfReader.cs` | PDF extraction contract |
+| `src/Diva.Tools/FileSystem/Abstractions/IImageReader.cs` | Image analysis contract |
+| `src/Diva.Tools/FileSystem/FileSystemPathGuard.cs` | Path canonicalization, deny-list glob, symlink guard |
+| `src/Diva.Tools/FileSystem/ToolFilter.cs` | Enabled-tools list, case-insensitive |
+| `src/Diva.Tools/FileSystem/Readers/PdfReader.cs` | PdfPig text + metadata extraction |
+| `src/Diva.Tools/FileSystem/Readers/ImageReader.cs` | ImageSharp Laplacian blur + exposure + EXIF |
+| `src/Diva.Tools/FileSystem/Models/DirectoryEntry.cs` | list_directory DTO |
+| `src/Diva.Tools/FileSystem/Models/FileInfoResult.cs` | get_file_info DTO |
+| `src/Diva.Tools/FileSystem/Models/ImageInfoResult.cs` | read_image / get_image_info DTO |
+| `src/Diva.Tools/FileSystem/FileSystemMcpTools.cs` | 12 MCP tools — thin facade over interfaces |
+| `tools/DivaFsMcpServer/DivaFsMcpServer.csproj` | Standalone exe project (net10, self-contained) |
+| `tools/DivaFsMcpServer/Program.cs` | stdio + --http modes, Windows Service support |
+| `tools/DivaFsMcpServer/StandaloneApiKeyMiddleware.cs` | Bearer/X-Api-Key auth for HTTP mode |
+| `tools/DivaFsMcpServer/appsettings.json` | Standalone config defaults |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `src/Diva.Tools/Diva.Tools.csproj` | Added PdfPig 0.*, SixLabors.ImageSharp 3.* |
+| `src/Diva.Host/Program.cs` | MCP server registration + `app.MapMcp("/mcp/diva").RequireAuthorization()` |
+| `src/Diva.Host/appsettings.json` | Added `FileSystem` config section |
+| `src/Diva.Host/Diva.Host.csproj` | Added `Microsoft.Extensions.Hosting.WindowsServices 10.*` |
+| `tests/Diva.Tools.Tests/Diva.Tools.Tests.csproj` | Added NSubstitute, logging abstractions, EmbeddedResource |
+| `Diva.slnx` | Added `tools/DivaFsMcpServer` folder |
+| `docs/INDEX.md` | Added Phase 23 row |
+| `docs/agents.md` | Added MCP Server (Phase 23) section |
+
+### Tests — 61 passing
+
+| Suite | Count |
+|-------|-------|
+| `FileSystemPathGuardTests` | 15 |
+| `ToolFilterTests` | 6 |
+| `FileSystemMcpToolsTests` | 12 |
+| `PdfReaderTests` | 6 |
+| `ImageReaderTests` | 10 |
+| **Total** | **61** |
+
+### Blur detection (Laplacian variance)
+
+Grayscale pixel array → manual `[0,-1,0; -1,4,-1; 0,-1,0]` kernel on interior pixels → variance
+of response values. `BlurThreshold = 100.0` separates sharp from blurry (configurable).
+JPEG compression slightly softens images; lower threshold in low-quality scenarios.
+
+### Phase 24 preview
+
+`ImageOptions.ClassificationEnabled = false` placeholder. Phase 24 will add `classify_image` tool
+calling Anthropic vision API (`claude-haiku-4-5-20251001`) with configurable categories + prompt.
+
+---
+
 ## [2026-04-20] Embeddable Chat Widget
 
 Full embeddable chat widget feature spanning backend, widget SPA, admin UI, and tests.

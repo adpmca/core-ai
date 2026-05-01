@@ -301,6 +301,46 @@ When `UnifiedLlmResponse.StopReason == "max_tokens"`:
 
 ---
 
+## MCP Server (Phase 23)
+
+Diva exposes a built-in MCP server at `/mcp/diva` (Diva.Host embedded mode) or as a standalone
+`diva-fs-mcp.exe` (stdio or HTTP, optionally a Windows Service).
+
+**Embedded endpoint:** `http://localhost:5062/mcp/diva` — requires JWT or `X-API-Key` auth.
+`TenantContext` is injected automatically via `McpServerContext.FromHttpContext`.
+
+**Standalone modes:**
+- `diva-fs-mcp.exe` — stdio transport (default, for Claude Desktop / agent bindings)
+- `diva-fs-mcp.exe --http` — HTTP transport at configurable port (Windows Service / IIS)
+- `DIVA_FS_MCP_PORT` env var — alternative to `--http` flag
+
+**Tools (12):** `read_file`, `read_pdf`, `get_image_info`, `read_image`, `list_directory`,
+`get_file_info`, `search_files`, `get_allowed_roots`, `write_file`, `create_directory`,
+`delete_file`, `move_item`
+
+**Agent binding — embedded:**
+```json
+{ "name": "fs", "endpoint": "http://localhost:5062/mcp/diva", "transport": "http", "passTenantHeaders": true }
+```
+
+**Agent binding — standalone stdio:**
+```json
+{ "name": "fs", "command": "C:\\DivaFsMcp\\diva-fs-mcp.exe", "transport": "stdio" }
+```
+
+**Key config (`appsettings.json → FileSystem:`):**
+- `AllowedBasePaths` — **must be set in production** (empty = all paths in dev)
+- `EnabledTools` — empty = all tools; list names to restrict
+- `PdfEnabled`, `ImagesEnabled`, `TextEnabled` — per-type feature flags
+- `AllowWrites` — must be `true` to enable write/delete/move tools
+- `StandaloneApiKey` — HTTP mode auth key (empty = no auth)
+
+**New agent tool type pattern:** Implement `IDivaMcpToolType` + mark class with
+`[McpServerToolType]`, register via `.WithDivaMcpTools<T>()`. Each call to `WithDivaMcpTools`
+adds a new tool group to the single shared MCP server.
+
+---
+
 ## MCP Credential Vault & Tool Call Authentication
 
 MCP tool bindings support three authentication methods, resolved per-request in `McpConnectionManager`:

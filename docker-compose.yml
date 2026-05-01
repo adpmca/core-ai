@@ -5,8 +5,9 @@ services:
 
   diva-api:
     build: .
+    env_file: .env
     ports:
-      - "8090:8080"    # Docker: 8090 — local dev stays on 8080
+      - "8010:8080"    # Docker: 8010 — local dev stays on 8080
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       Database__Provider: SQLite
@@ -30,6 +31,8 @@ services:
       # credentials become unrecoverable after restart.
       # Generate with: openssl rand -base64 32
       Credentials__MasterKey: "${CREDENTIALS_MASTER_KEY}"
+      LocalAuth__SigningKey: "${LOCAL_AUTH_SIGNING_KEY}"
+      OAuth__Enabled: "true"
       A2A__Enabled: "true"
     volumes:
       - ./data:/data
@@ -41,9 +44,13 @@ services:
     restart: unless-stopped
 
   diva-portal:
-    build: ./admin-portal
+    build:
+      context: ./admin-portal
+      args:
+        VITE_API_URL: "http://localhost:8010"
+        VITE_AUTH_ENABLED: "true"
     ports:
-      - "3000:80"      # Docker: 3000 — local dev stays on 5173
+      - "3010:80"      # Docker: 3010 — local dev stays on 5173
     depends_on:
       diva-api:
         condition: service_healthy
