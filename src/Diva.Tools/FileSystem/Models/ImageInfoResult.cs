@@ -12,4 +12,5 @@ public sealed record ImageInfoResult(
     string OverallQuality,      // "good" | "degraded" | "poor"
     Dictionary<string, string> Exif,
     string? ThumbnailBase64,
-    string? ImageBase64);
+    string? ImageBase64,
+    string? ImageMediaType);

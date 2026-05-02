@@ -21,6 +21,13 @@ public sealed class FileSystemOptionsValidator(IHostEnvironment env)
             return ValidateOptionsResult.Fail(
                 "FileSystem:MaxReadFileSizeBytes must be >= 1.");
 
+        if (options.Office.MaxRowsPerSheet < 1)
+            return ValidateOptionsResult.Fail("FileSystem:Office:MaxRowsPerSheet must be >= 1.");
+        if (options.Office.MaxSheetsToRead < 1)
+            return ValidateOptionsResult.Fail("FileSystem:Office:MaxSheetsToRead must be >= 1.");
+        if (options.Office.MaxSlidesToRead < 1)
+            return ValidateOptionsResult.Fail("FileSystem:Office:MaxSlidesToRead must be >= 1.");
+
         return ValidateOptionsResult.Success;
     }
 }

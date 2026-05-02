@@ -37,11 +37,35 @@ public sealed class ImageReader(ILogger<ImageReader> logger) : IImageReader
             : null;
 
         string? imageBase64 = null;
+        string? imageMediaType = null;
         if (opts.ReturnBase64)
         {
-            using var ms = new MemoryStream();
-            image.SaveAsJpeg(ms);
-            imageBase64 = Convert.ToBase64String(ms.ToArray());
+            var fmt = image.Metadata.DecodedImageFormat;
+            imageMediaType = fmt?.DefaultMimeType ?? "image/jpeg";
+
+            Image<Rgba32>? resized = null;
+            try
+            {
+                Image<Rgba32> toEncode = image;
+                var maxDim = opts.Base64MaxDimensionPx;
+                if (maxDim > 0 && (image.Width > maxDim || image.Height > maxDim))
+                {
+                    var ratio = Math.Min((double)maxDim / image.Width, (double)maxDim / image.Height);
+                    var w = Math.Max(1, (int)(image.Width  * ratio));
+                    var h = Math.Max(1, (int)(image.Height * ratio));
+                    resized  = image.Clone(ctx => ctx.Resize(w, h));
+                    toEncode = resized;
+                }
+
+                using var ms = new MemoryStream();
+                if (fmt is not null) toEncode.Save(ms, fmt);
+                else                 toEncode.SaveAsJpeg(ms);
+                imageBase64 = Convert.ToBase64String(ms.ToArray());
+            }
+            finally
+            {
+                resized?.Dispose();
+            }
         }
 
         return new ImageInfoResult(
@@ -56,7 +80,8 @@ public sealed class ImageReader(ILogger<ImageReader> logger) : IImageReader
             OverallQuality: overallQuality,
             Exif: exif,
             ThumbnailBase64: thumbnailBase64,
-            ImageBase64: imageBase64);
+            ImageBase64: imageBase64,
+            ImageMediaType: imageMediaType);
     }
 
     private static (double blurScore, double meanBrightness) ComputeQualityMetrics(Image<Rgba32> source)

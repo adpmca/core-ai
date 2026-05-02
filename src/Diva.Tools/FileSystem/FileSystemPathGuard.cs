@@ -23,6 +23,15 @@ public sealed class FileSystemPathGuard(
         if (string.IsNullOrWhiteSpace(path))
             throw new ArgumentException("Path must not be empty.");
 
+        // LLMs frequently generate incorrect paths. Normalize common cases against AllowedBasePaths:
+        //   1. Unix-style absolute:   /Desktop/file.txt  → C:\Users\Admin\Desktop\file.txt
+        //   2. Relative:              Desktop/file.txt   → C:\Users\Admin\Desktop\file.txt
+        //   3. Wrong user/prefix:     C:\Users\ajay\Desktop\file.txt → C:\Users\Admin\Desktop\file.txt
+        //      (any absolute Windows path whose dir structure contains the AllowedBasePath dir name)
+        if (_opts.AllowedBasePaths.Count > 0)
+            path = NormalizeLlmPath(path);
+
+
         if (!Path.IsPathRooted(path))
             throw new ArgumentException("Absolute path required. Relative paths are not allowed.");
 
@@ -81,6 +90,44 @@ public sealed class FileSystemPathGuard(
         }
 
         return resolved;
+    }
+
+    private string NormalizeLlmPath(string path)
+    {
+        foreach (var basePath in _opts.AllowedBasePaths)
+        {
+            var baseNorm = Path.GetFullPath(basePath).TrimEnd(Path.DirectorySeparatorChar);
+            var baseName = Path.GetFileName(baseNorm); // e.g. "Desktop"
+
+            // Case 1 & 2: Unix-style (/Desktop/file) or relative (Desktop/file)
+            // First path component equals the AllowedBasePath directory name.
+            if (!Path.IsPathRooted(path) || path.StartsWith('/'))
+            {
+                var stripped = path.TrimStart('/').Replace('/', Path.DirectorySeparatorChar);
+                var sep = stripped.IndexOf(Path.DirectorySeparatorChar);
+                var first = sep >= 0 ? stripped[..sep] : stripped;
+                var rest  = sep >= 0 ? stripped[(sep + 1)..] : string.Empty;
+
+                if (string.Equals(first, baseName, _pathComparison))
+                    return string.IsNullOrEmpty(rest) ? baseNorm : Path.Combine(baseNorm, rest);
+            }
+            // Case 3: Absolute Windows path with wrong prefix (e.g. wrong username).
+            // Find the AllowedBasePath dir name inside the path and remap everything after it.
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                var needle = Path.DirectorySeparatorChar + baseName + Path.DirectorySeparatorChar;
+                var idx = path.IndexOf(needle, _pathComparison);
+                if (idx >= 0)
+                {
+                    var rest = path[(idx + needle.Length)..];
+                    return string.IsNullOrEmpty(rest) ? baseNorm : Path.Combine(baseNorm, rest);
+                }
+                // Path ends with \Desktop (no trailing slash)
+                if (path.EndsWith(Path.DirectorySeparatorChar + baseName, _pathComparison))
+                    return baseNorm;
+            }
+        }
+        return path;
     }
 
     public IReadOnlyList<string> GetAllowedRoots()

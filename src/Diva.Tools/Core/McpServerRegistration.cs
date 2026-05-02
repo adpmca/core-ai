@@ -1,3 +1,4 @@
+using Diva.Tools.FileSystem;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Server;
 
@@ -10,11 +11,13 @@ public static class DivaMcpServerExtensions
 {
     /// <summary>
     /// Registers <typeparamref name="T"/> as Scoped in DI and adds its tools to the MCP server.
-    /// Scoped lifetime is required because tool handlers use IHttpContextAccessor (request-scoped).
+    /// Also registers concurrency-safety singletons (FileWriteLock, ScriptThrottle).
     /// </summary>
     public static IMcpServerBuilder WithDivaMcpTools<T>(this IMcpServerBuilder builder)
         where T : class, IDivaMcpToolType
     {
+        builder.Services.AddSingleton<FileWriteLock>();
+        builder.Services.AddSingleton<ScriptThrottle>();
         builder.Services.AddScoped<T>();
         return builder.WithTools<T>();
     }

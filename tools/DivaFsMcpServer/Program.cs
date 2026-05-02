@@ -1,10 +1,13 @@
+using System.Threading.RateLimiting;
 using Diva.Tools.Core;
 using Diva.Tools.FileSystem;
 using Diva.Tools.FileSystem.Abstractions;
 using Diva.Tools.FileSystem.Readers;
+using Diva.Tools.FileSystem.Writers;
 using DivaFsMcpServer;
 using DivaFsMcpServer.Auth;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Options;
 
 var isHttp = args.Contains("--http") ||
@@ -26,6 +29,8 @@ builder.Services.AddScoped<IFileSystemPathGuard, FileSystemPathGuard>();
 builder.Services.AddScoped<IToolFilter, ToolFilter>();
 builder.Services.AddScoped<IPdfReader, PdfReader>();
 builder.Services.AddScoped<IImageReader, ImageReader>();
+builder.Services.AddScoped<IOfficeReader, OfficeReader>();
+builder.Services.AddScoped<IOfficeWriter, OfficeWriter>();
 builder.Services.AddTransient<StandaloneAuthMiddleware>();
 
 var mcpBuilder = builder.Services
@@ -33,7 +38,26 @@ var mcpBuilder = builder.Services
     .WithDivaMcpTools<FileSystemMcpTools>();
 
 if (isHttp)
+{
     mcpBuilder.WithHttpTransport();
+
+    var rateLimit = builder.Configuration.GetValue<int>("FileSystem:RateLimitPerMinute", 120);
+    if (rateLimit > 0)
+    {
+        builder.Services.AddRateLimiter(opts =>
+        {
+            opts.AddSlidingWindowLimiter("mcp", policy =>
+            {
+                policy.PermitLimit = rateLimit;
+                policy.Window = TimeSpan.FromMinutes(1);
+                policy.SegmentsPerWindow = 6;
+                policy.QueueLimit = 10;
+                policy.QueueProcessingOrder = QueueProcessingOrder.OldestFirst;
+            });
+            opts.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+        });
+    }
+}
 else
     mcpBuilder.WithStdioServerTransport();
 
@@ -41,6 +65,9 @@ var app = builder.Build();
 
 if (isHttp)
 {
+    var rateLimit = app.Configuration.GetValue<int>("FileSystem:RateLimitPerMinute", 120);
+    if (rateLimit > 0) app.UseRateLimiter();
+
     app.UseMiddleware<StandaloneAuthMiddleware>();
 
     app.MapPost("/auth/token", (
@@ -66,7 +93,8 @@ if (isHttp)
         });
     });
 
-    app.MapMcp("/mcp");
+    var mcpEndpoint = app.MapMcp("/mcp");
+    if (rateLimit > 0) mcpEndpoint.RequireRateLimiting("mcp");
 }
 
 await app.RunAsync();
