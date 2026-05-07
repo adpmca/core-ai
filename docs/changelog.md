@@ -4,6 +4,43 @@
 
 ---
 
+## [2026-05-06] Scheduled Tasks — Clone, Export, and Import
+
+Full-stack feature across both tenant-scoped and group-scoped scheduled tasks.
+
+### Clone
+
+- **Tenant (`ScheduledTasks.tsx`)**: dropdown "Clone" item pre-fills the create dialog with all fields from the selected task (name prefixed with "Copy of ").
+- **Group (`GroupDetail.tsx` → `SchedulesTab`)**: dedicated icon button in the task row opens the create dialog in clone mode.
+
+### Export (JSON download)
+
+- **Export All** toolbar button downloads all visible tasks as a structured JSON envelope:
+  ```json
+  { "version": "1", "exportedAt": "...", "type": "tenant-schedules"|"group-schedules", "tasks": [...] }
+  ```
+- **Export** per-row dropdown/icon exports a single task.
+- File is named `{tenant|group-id}-schedules-{date}.json` or `{task-slug}-{date}.json`.
+
+### Import (JSON upload with conflict detection)
+
+- **Import** toolbar button opens a dialog accepting pasted JSON or a file upload.
+- **Preview** step shows task count and highlights any name conflicts with existing tasks.
+- **Skip / Allow** toggle: skip conflicts (default) or overwrite by creating duplicates.
+- Backend bulk endpoint validates all tasks and returns `{ created, skipped, skippedNames }`.
+
+### Files changed
+
+| File | Change |
+|------|--------|
+| `src/Diva.Host/Controllers/SchedulerController.cs` | `POST /api/schedules/import` endpoint + `ScheduledTaskExport`, `ScheduleImportRequest`, `ScheduleImportResult` DTOs |
+| `src/Diva.Host/Controllers/GroupsController.cs` | `POST /api/platform/groups/{id}/schedules/import` endpoint + group-scoped DTOs |
+| `admin-portal/src/api.ts` | `ScheduledTaskExport`, `ScheduleExportEnvelope`, `ScheduleImportRequest/Result`, group variants; `importSchedules()`, `importGroupSchedules()` methods |
+| `admin-portal/src/components/ScheduledTasks.tsx` | Clone mode in `TaskDialog`; Export All + per-row Export; Import dialog with preview + conflict UI |
+| `admin-portal/src/components/GroupDetail.tsx` | Clone icon button; Export All + per-row Export icon; Import dialog (same UX pattern) |
+
+---
+
 ## [2026-05-06] Phase 19 Foundation — Supervisor Pipeline SOLID Refactor + Semantic Tool Pre-Filter
 
 Seven-gap analysis of the Phase 19 supervisor pipeline foundation. All gaps resolved with SOLID-aligned

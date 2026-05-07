@@ -8,6 +8,7 @@ import {
   type ArchetypeSummary, type CreateGroupRuleDto,
   type CreateGroupPromptOverrideDto, type CreateGroupTaskDto,
   type UpsertLlmConfigDto, type CreateNamedLlmConfigDto,
+  type GroupScheduledTaskExport, type ScheduleExportEnvelope,
 } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,7 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ArrowLeft, Plus, Trash2, Pencil, Layers } from "lucide-react";
+import { ArrowLeft, Plus, Trash2, Pencil, Layers, Copy, Download, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { LlmForm } from "@/components/PlatformLlmConfig";
 
@@ -658,8 +659,17 @@ function SchedulesTab({ groupId }: { groupId: number }) {
   const [loading,    setLoading]    = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editTask,   setEditTask]   = useState<GroupScheduledTask | null>(null);
+  const [isCloning,  setIsCloning]  = useState(false);
   const [form,       setForm]       = useState<CreateGroupTaskDto>(emptyTaskForm);
   const [saving,     setSaving]     = useState(false);
+
+  // Import state
+  const [importOpen,      setImportOpen]      = useState(false);
+  const [importRaw,       setImportRaw]       = useState("");
+  const [importParsed,    setImportParsed]    = useState<GroupScheduledTaskExport[] | null>(null);
+  const [importConflicts, setImportConflicts] = useState<string[]>([]);
+  const [importSkip,      setImportSkip]      = useState(true);
+  const [importing,       setImporting]       = useState(false);
 
   async function load() {
     try {
@@ -675,18 +685,41 @@ function SchedulesTab({ groupId }: { groupId: number }) {
 
   function openCreate() {
     setEditTask(null);
+    setIsCloning(false);
     setForm(emptyTaskForm);
     setDialogOpen(true);
   }
 
   function openEdit(t: GroupScheduledTask) {
     setEditTask(t);
+    setIsCloning(false);
     setForm({
       agentType: t.agentType, name: t.name, description: t.description ?? "",
       scheduleType: t.scheduleType, scheduledAtUtc: t.scheduledAtUtc,
       runAtTime: t.runAtTime ?? "09:00", dayOfWeek: t.dayOfWeek,
       timeZoneId: t.timeZoneId, payloadType: t.payloadType,
       promptText: t.promptText, isEnabled: t.isEnabled,
+    });
+    setDialogOpen(true);
+  }
+
+  function openClone(t: GroupScheduledTask) {
+    setEditTask(null);
+    setIsCloning(true);
+    setForm({
+      agentType: t.agentType,
+      name: `${t.name} (copy)`,
+      description: t.description ?? "",
+      scheduleType: t.scheduleType,
+      // Gap 2 fix: never carry a past one-time date into a clone
+      scheduledAtUtc: t.scheduleType === "once" ? undefined : t.scheduledAtUtc,
+      runAtTime: t.runAtTime ?? "09:00",
+      dayOfWeek: t.dayOfWeek,
+      timeZoneId: t.timeZoneId,
+      payloadType: t.payloadType,
+      promptText: t.promptText,
+      // Clone always starts disabled
+      isEnabled: false,
     });
     setDialogOpen(true);
   }
@@ -700,9 +733,10 @@ function SchedulesTab({ groupId }: { groupId: number }) {
         toast.success("Schedule updated");
       } else {
         await api.createGroupSchedule(groupId, dto);
-        toast.success("Schedule created");
+        toast.success(isCloning ? "Schedule cloned" : "Schedule created");
       }
       setDialogOpen(false);
+      setIsCloning(false);
       load();
     } catch (e) {
       toast.error(`Failed: ${e}`);
@@ -725,12 +759,95 @@ function SchedulesTab({ groupId }: { groupId: number }) {
   const p = (field: keyof CreateGroupTaskDto, v: unknown) =>
     setForm(f => ({ ...f, [field]: v }));
 
+  // ── Export helpers ──────────────────────────────────────────────────────
+  const toExportTask = (t: GroupScheduledTask): GroupScheduledTaskExport => ({
+    agentType: t.agentType, name: t.name, description: t.description,
+    scheduleType: t.scheduleType, scheduledAtUtc: t.scheduledAtUtc,
+    runAtTime: t.runAtTime, dayOfWeek: t.dayOfWeek, timeZoneId: t.timeZoneId,
+    payloadType: t.payloadType, promptText: t.promptText,
+    parametersJson: t.parametersJson, isEnabled: t.isEnabled,
+  });
+
+  const triggerDownload = (json: string, filename: string) => {
+    const blob = new Blob([json], { type: "application/json" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const dateSlug = () => new Date().toISOString().slice(0, 10);
+
+  const handleExportAll = () => {
+    const envelope: ScheduleExportEnvelope = {
+      version: "1", exportedAt: new Date().toISOString(),
+      type: "group-schedules",
+      tasks: tasks.map(toExportTask) as unknown as ScheduleExportEnvelope["tasks"],
+    };
+    triggerDownload(JSON.stringify(envelope, null, 2), `group-${groupId}-schedules-${dateSlug()}.json`);
+  };
+
+  const handleExportOne = (t: GroupScheduledTask) => {
+    const envelope: ScheduleExportEnvelope = {
+      version: "1", exportedAt: new Date().toISOString(),
+      type: "group-schedules",
+      tasks: [toExportTask(t)] as unknown as ScheduleExportEnvelope["tasks"],
+    };
+    const slug = t.name.replace(/\s+/g, "-").toLowerCase();
+    triggerDownload(JSON.stringify(envelope, null, 2), `group-schedule-${slug}-${dateSlug()}.json`);
+  };
+
+  // ── Import helpers ──────────────────────────────────────────────────────
+  const closeImport = () => {
+    setImportOpen(false); setImportRaw("");
+    setImportParsed(null); setImportConflicts([]); setImportSkip(true);
+  };
+
+  const handleImportParse = () => {
+    let parsed: ScheduleExportEnvelope;
+    try { parsed = JSON.parse(importRaw); }
+    catch { toast.error("Invalid JSON — check the file format."); return; }
+    if (!parsed?.tasks || !Array.isArray(parsed.tasks)) {
+      toast.error("Invalid format: missing \"tasks\" array."); return;
+    }
+    if (parsed.type && parsed.type !== "group-schedules") {
+      toast.error(`Wrong file type: expected "group-schedules", got "${parsed.type}".`); return;
+    }
+    const existing = new Set(tasks.map(t => t.name.toLowerCase()));
+    const conflicts = parsed.tasks
+      .filter(t => existing.has((t.name ?? "").toLowerCase()))
+      .map(t => t.name);
+    setImportParsed(parsed.tasks as unknown as GroupScheduledTaskExport[]);
+    setImportConflicts(conflicts);
+  };
+
+  const handleImportSubmit = async () => {
+    if (!importParsed?.length) return;
+    setImporting(true);
+    try {
+      const result = await api.importGroupSchedules(groupId, { tasks: importParsed, skipConflicts: importSkip });
+      toast.success(`Imported: ${result.created} created, ${result.skipped} skipped.`);
+      closeImport();
+      load();
+    } catch (e) { toast.error(`Import failed: ${e}`); }
+    finally { setImporting(false); }
+  };
+
   if (loading) return <div className="py-8 text-center text-muted-foreground">Loading…</div>;
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <Button onClick={openCreate}><Plus className="size-4 mr-2" /> New Schedule</Button>
+      <div className="flex items-center justify-between">
+        <div />
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={handleExportAll} disabled={tasks.length === 0}>
+            <Download className="size-4 mr-2" /> Export All
+          </Button>
+          <Button variant="outline" onClick={() => setImportOpen(true)}>
+            <Upload className="size-4 mr-2" /> Import
+          </Button>
+          <Button onClick={openCreate}><Plus className="size-4 mr-2" /> New Schedule</Button>
+        </div>
       </div>
 
       <Card>
@@ -770,6 +887,8 @@ function SchedulesTab({ groupId }: { groupId: number }) {
                   <TableCell>
                     <div className="flex gap-1">
                       <Button size="icon" variant="ghost" onClick={() => openEdit(t)}><Pencil className="size-4" /></Button>
+                      <Button size="icon" variant="ghost" onClick={() => openClone(t)} title="Clone"><Copy className="size-4" /></Button>
+                      <Button size="icon" variant="ghost" onClick={() => handleExportOne(t)} title="Export"><Download className="size-4" /></Button>
                       <Button size="icon" variant="ghost" className="text-destructive" onClick={() => deleteTask(t)}><Trash2 className="size-4" /></Button>
                     </div>
                   </TableCell>
@@ -780,10 +899,10 @@ function SchedulesTab({ groupId }: { groupId: number }) {
         </CardContent>
       </Card>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog open={dialogOpen} onOpenChange={v => { setDialogOpen(v); if (!v) setIsCloning(false); }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>{editTask ? "Edit Schedule" : "New Group Schedule"}</DialogTitle>
+            <DialogTitle>{editTask ? "Edit Schedule" : isCloning ? "Clone Group Schedule" : "New Group Schedule"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <div className="grid grid-cols-2 gap-3">
@@ -842,7 +961,77 @@ function SchedulesTab({ groupId }: { groupId: number }) {
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
             <Button onClick={save} disabled={saving || !form.name || !form.agentType || !form.promptText}>
-              {saving ? "Saving…" : "Save"}
+              {saving ? "Saving…" : editTask ? "Save Changes" : isCloning ? "Clone Schedule" : "Save"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Import dialog ─────────────────────────────────────────────────── */}
+      <Dialog open={importOpen} onOpenChange={v => { if (!v) closeImport(); else setImportOpen(true); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Import Group Schedules</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <div className="space-y-1">
+              <Label>JSON file</Label>
+              <input
+                type="file" accept=".json,application/json"
+                className="block w-full text-sm text-muted-foreground file:mr-3 file:py-1 file:px-3 file:rounded file:border file:border-input file:text-sm file:font-medium cursor-pointer"
+                onChange={e => {
+                  const f = e.target.files?.[0];
+                  if (!f) return;
+                  const reader = new FileReader();
+                  reader.onload = ev => { setImportRaw(ev.target?.result as string ?? ""); setImportParsed(null); setImportConflicts([]); };
+                  reader.readAsText(f);
+                }}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Or paste JSON</Label>
+              <textarea
+                className="w-full min-h-[80px] rounded-md border border-input bg-background px-3 py-2 font-mono text-xs resize-y"
+                placeholder='{"version":"1","type":"group-schedules","tasks":[...]}'
+                value={importRaw}
+                onChange={e => { setImportRaw(e.target.value); setImportParsed(null); setImportConflicts([]); }}
+              />
+            </div>
+            {importParsed === null ? (
+              <Button size="sm" variant="outline" onClick={handleImportParse} disabled={!importRaw.trim()}>
+                Preview
+              </Button>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">{importParsed.length}</span> task{importParsed.length !== 1 ? "s" : ""} found.
+                </p>
+                {importConflicts.length > 0 && (
+                  <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 space-y-1">
+                    <p className="text-xs font-medium text-amber-500">{importConflicts.length} name conflict{importConflicts.length !== 1 ? "s" : ""}:</p>
+                    <ul className="text-xs text-muted-foreground list-disc list-inside">
+                      {importConflicts.map(n => <li key={n}>{n}</li>)}
+                    </ul>
+                    <div className="flex items-center gap-2 pt-1">
+                      <Switch checked={importSkip} onCheckedChange={setImportSkip} />
+                      <span className="text-xs">
+                        {importSkip ? `Skip ${importConflicts.length} conflicting task${importConflicts.length !== 1 ? "s" : ""}` : "Create anyway (duplicates allowed)"}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeImport}>Cancel</Button>
+            <Button
+              onClick={handleImportSubmit}
+              disabled={!importParsed?.length || importing}
+            >
+              {importing ? "Importing…" : importParsed
+                ? `Import (${importSkip ? importParsed.length - importConflicts.length : importParsed.length} new)`
+                : "Import"}
             </Button>
           </DialogFooter>
         </DialogContent>

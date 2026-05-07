@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   api, type AgentSummary, type ScheduledTask, type ScheduledTaskRun, type CreateScheduleDto,
+  type ScheduledTaskExport, type ScheduleExportEnvelope,
 } from "@/api";
 import { toast } from "sonner";
 import {
@@ -34,7 +35,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   MoreHorizontal, Plus, CalendarClock, Pencil, Trash2,
-  Play, History, RefreshCw, ChevronDown, ChevronRight,
+  Play, History, RefreshCw, ChevronDown, ChevronRight, Copy, Download, Upload,
 } from "lucide-react";
 
 const TIMEZONES = [
@@ -81,10 +82,19 @@ export function ScheduledTasks() {
   const [tasks, setTasks]       = useState<ScheduledTask[]>([]);
   const [agents, setAgents]     = useState<AgentSummary[]>([]);
   const [loading, setLoading]   = useState(true);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editTask, setEditTask] = useState<ScheduledTask | null>(null);
-  const [runsTask, setRunsTask] = useState<ScheduledTask | null>(null);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [dialogOpen,  setDialogOpen]  = useState(false);
+  const [dialogMode,   setDialogMode]   = useState<"create" | "edit" | "clone">("create");
+  const [editTask,     setEditTask]     = useState<ScheduledTask | null>(null);
+  const [runsTask,     setRunsTask]     = useState<ScheduledTask | null>(null);
+  const [deleteId,     setDeleteId]     = useState<string | null>(null);
+
+  // Import state
+  const [importOpen,      setImportOpen]      = useState(false);
+  const [importRaw,       setImportRaw]       = useState("");
+  const [importParsed,    setImportParsed]    = useState<ScheduledTaskExport[] | null>(null);
+  const [importConflicts, setImportConflicts] = useState<string[]>([]);
+  const [importSkip,      setImportSkip]      = useState(true);
+  const [importing,       setImporting]       = useState(false);
 
   useEffect(() => {
     api.listAgents().then(setAgents).catch(() => {});
@@ -128,8 +138,81 @@ export function ScheduledTasks() {
     return a ? (a.displayName || a.name) : agentId;
   };
 
-  const openCreate = () => { setEditTask(null); setDialogOpen(true); };
-  const openEdit   = (task: ScheduledTask) => { setEditTask(task); setDialogOpen(true); };
+  const openCreate = () => { setDialogMode("create"); setEditTask(null); setDialogOpen(true); };
+  const openEdit   = (task: ScheduledTask) => { setDialogMode("edit"); setEditTask(task); setDialogOpen(true); };
+  const openClone  = (task: ScheduledTask) => { setDialogMode("clone"); setEditTask(task); setDialogOpen(true); };
+
+  // ── Export helpers ──────────────────────────────────────────────────────
+  const toExportTask = (t: ScheduledTask): ScheduledTaskExport => ({
+    agentId: t.agentId, name: t.name, description: t.description,
+    scheduleType: t.scheduleType, scheduledAtUtc: t.scheduledAtUtc,
+    runAtTime: t.runAtTime, dayOfWeek: t.dayOfWeek, timeZoneId: t.timeZoneId,
+    payloadType: t.payloadType, promptText: t.promptText,
+    parametersJson: t.parametersJson, isEnabled: t.isEnabled,
+  });
+
+  const triggerDownload = (json: string, filename: string) => {
+    const blob = new Blob([json], { type: "application/json" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const dateSlug = () => new Date().toISOString().slice(0, 10);
+
+  const handleExportAll = () => {
+    const envelope: ScheduleExportEnvelope = {
+      version: "1", exportedAt: new Date().toISOString(),
+      type: "tenant-schedules", tasks: tasks.map(toExportTask),
+    };
+    triggerDownload(JSON.stringify(envelope, null, 2), `schedules-all-${dateSlug()}.json`);
+  };
+
+  const handleExportOne = (task: ScheduledTask) => {
+    const envelope: ScheduleExportEnvelope = {
+      version: "1", exportedAt: new Date().toISOString(),
+      type: "tenant-schedules", tasks: [toExportTask(task)],
+    };
+    const slug = task.name.replace(/\s+/g, "-").toLowerCase();
+    triggerDownload(JSON.stringify(envelope, null, 2), `schedule-${slug}-${dateSlug()}.json`);
+  };
+
+  // ── Import helpers ──────────────────────────────────────────────────────
+  const closeImport = () => {
+    setImportOpen(false); setImportRaw("");
+    setImportParsed(null); setImportConflicts([]); setImportSkip(true);
+  };
+
+  const handleImportParse = () => {
+    let parsed: ScheduleExportEnvelope;
+    try { parsed = JSON.parse(importRaw); }
+    catch { toast.error("Invalid JSON — check the file format."); return; }
+    if (!parsed?.tasks || !Array.isArray(parsed.tasks)) {
+      toast.error("Invalid format: missing \"tasks\" array."); return;
+    }
+    if (parsed.type && parsed.type !== "tenant-schedules") {
+      toast.error(`Wrong file type: expected "tenant-schedules", got "${parsed.type}".`); return;
+    }
+    const existing = new Set(tasks.map(t => t.name.toLowerCase()));
+    const conflicts = parsed.tasks
+      .filter(t => existing.has((t.name ?? "").toLowerCase()))
+      .map(t => t.name);
+    setImportParsed(parsed.tasks as ScheduledTaskExport[]);
+    setImportConflicts(conflicts);
+  };
+
+  const handleImportSubmit = async () => {
+    if (!importParsed?.length) return;
+    setImporting(true);
+    try {
+      const result = await api.importSchedules({ tasks: importParsed, skipConflicts: importSkip }, 1);
+      toast.success(`Imported: ${result.created} created, ${result.skipped} skipped.`);
+      closeImport();
+      load();
+    } catch (e: unknown) { toast.error(String(e)); }
+    finally { setImporting(false); }
+  };
 
   return (
     <div className="space-y-4">
@@ -143,6 +226,12 @@ export function ScheduledTasks() {
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={load} className="h-8">
             <RefreshCw className="h-3.5 w-3.5" />
+          </Button>
+          <Button size="sm" variant="outline" onClick={handleExportAll} className="h-8" disabled={tasks.length === 0}>
+            <Download className="h-3.5 w-3.5 mr-1" /> Export All
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setImportOpen(true)} className="h-8">
+            <Upload className="h-3.5 w-3.5 mr-1" /> Import
           </Button>
           <Button size="sm" onClick={openCreate} className="h-8">
             <Plus className="h-3.5 w-3.5 mr-1" /> New Schedule
@@ -238,6 +327,12 @@ export function ScheduledTasks() {
                         <DropdownMenuItem onClick={() => openEdit(task)}>
                           <Pencil className="h-3.5 w-3.5 mr-2" /> Edit
                         </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => openClone(task)}>
+                          <Copy className="h-3.5 w-3.5 mr-2" /> Clone
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleExportOne(task)}>
+                          <Download className="h-3.5 w-3.5 mr-2" /> Export
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => handleTrigger(task)}>
                           <Play className="h-3.5 w-3.5 mr-2" /> Run Now
                         </DropdownMenuItem>
@@ -264,7 +359,8 @@ export function ScheduledTasks() {
       <TaskDialog
         open={dialogOpen}
         onOpenChange={setDialogOpen}
-        initial={editTask}
+        mode={dialogMode}
+        source={editTask}
         agents={agents}
         onSaved={() => { setDialogOpen(false); load(); }}
       />
@@ -274,6 +370,76 @@ export function ScheduledTasks() {
         agentName={runsTask ? agentName(runsTask.agentId) : ""}
         onClose={() => setRunsTask(null)}
       />
+
+      {/* ── Import dialog ───────────────────────────────────────────────── */}
+      <Dialog open={importOpen} onOpenChange={v => { if (!v) closeImport(); else setImportOpen(true); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Import Schedules</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <div className="space-y-1">
+              <Label>JSON file</Label>
+              <input
+                type="file" accept=".json,application/json"
+                className="block w-full text-sm text-muted-foreground file:mr-3 file:py-1 file:px-3 file:rounded file:border file:border-input file:text-sm file:font-medium cursor-pointer"
+                onChange={e => {
+                  const f = e.target.files?.[0];
+                  if (!f) return;
+                  const reader = new FileReader();
+                  reader.onload = ev => { setImportRaw(ev.target?.result as string ?? ""); setImportParsed(null); setImportConflicts([]); };
+                  reader.readAsText(f);
+                }}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Or paste JSON</Label>
+              <Textarea
+                className="font-mono text-xs h-32 resize-y"
+                placeholder='{"version":"1","type":"tenant-schedules","tasks":[...]}'
+                value={importRaw}
+                onChange={e => { setImportRaw(e.target.value); setImportParsed(null); setImportConflicts([]); }}
+              />
+            </div>
+            {importParsed === null ? (
+              <Button size="sm" variant="outline" onClick={handleImportParse} disabled={!importRaw.trim()}>
+                Preview
+              </Button>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">{importParsed.length}</span> task{importParsed.length !== 1 ? "s" : ""} found.
+                </p>
+                {importConflicts.length > 0 && (
+                  <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 space-y-1">
+                    <p className="text-xs font-medium text-amber-500">{importConflicts.length} name conflict{importConflicts.length !== 1 ? "s" : ""}:</p>
+                    <ul className="text-xs text-muted-foreground list-disc list-inside">
+                      {importConflicts.map(n => <li key={n}>{n}</li>)}
+                    </ul>
+                    <div className="flex items-center gap-2 pt-1">
+                      <Switch checked={importSkip} onCheckedChange={setImportSkip} />
+                      <span className="text-xs">
+                        {importSkip ? `Skip ${importConflicts.length} conflicting task${importConflicts.length !== 1 ? "s" : ""}` : "Create anyway (duplicates allowed)"}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <DialogClose asChild><Button variant="outline">Cancel</Button></DialogClose>
+            <Button
+              onClick={handleImportSubmit}
+              disabled={!importParsed?.length || importing}
+            >
+              {importing ? "Importing…" : importParsed
+                ? `Import (${importSkip ? importParsed.length - importConflicts.length : importParsed.length} new)`
+                : "Import"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={deleteId !== null} onOpenChange={(open: boolean) => !open && setDeleteId(null)}>
         <AlertDialogContent>
@@ -303,53 +469,52 @@ export function ScheduledTasks() {
 interface TaskDialogProps {
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  initial: ScheduledTask | null;
+  mode: "create" | "edit" | "clone";
+  source: ScheduledTask | null;
   agents: AgentSummary[];
   onSaved: () => void;
 }
 
-function TaskDialog({ open, onOpenChange, initial, agents, onSaved }: TaskDialogProps) {
-  const editing = initial !== null;
-
-  const [agentId,       setAgentId]       = useState(initial?.agentId ?? (agents[0]?.id ?? ""));
-  const [name,          setName]          = useState(initial?.name ?? "");
-  const [description,   setDescription]   = useState(initial?.description ?? "");
-  const [scheduleType,  setScheduleType]  = useState(initial?.scheduleType ?? "once");
-  const [scheduledAt,   setScheduledAt]   = useState(
-    initial?.scheduledAtUtc ? initial.scheduledAtUtc.slice(0, 16) : "");
-  const [runAtTime,     setRunAtTime]     = useState(initial?.runAtTime ?? "09:00");
-  const [dayOfWeek,     setDayOfWeek]     = useState<number>(initial?.dayOfWeek ?? 1);
-  const [timeZoneId,    setTimeZoneId]    = useState(initial?.timeZoneId ?? "UTC");
-  const [payloadType,   setPayloadType]   = useState(initial?.payloadType ?? "prompt");
-  const [promptText,    setPromptText]    = useState(initial?.promptText ?? "");
-  const [parametersRaw, setParametersRaw] = useState<string>(
-    initial?.parametersJson
-      ? (() => { try { return JSON.stringify(JSON.parse(initial.parametersJson), null, 2); } catch { return initial.parametersJson; } })()
-      : '{\n  "variable": "value"\n}'
-  );
-  const [isEnabled, setIsEnabled] = useState(initial?.isEnabled ?? true);
-  const [saving,    setSaving]    = useState(false);
+function TaskDialog({ open, onOpenChange, mode, source, agents, onSaved }: TaskDialogProps) {
+  const [agentId,       setAgentId]       = useState("");
+  const [name,          setName]          = useState("");
+  const [description,   setDescription]   = useState("");
+  const [scheduleType,  setScheduleType]  = useState("once");
+  const [scheduledAt,   setScheduledAt]   = useState("");
+  const [runAtTime,     setRunAtTime]     = useState("09:00");
+  const [dayOfWeek,     setDayOfWeek]     = useState<number>(1);
+  const [timeZoneId,    setTimeZoneId]    = useState("UTC");
+  const [payloadType,   setPayloadType]   = useState("prompt");
+  const [promptText,    setPromptText]    = useState("");
+  const [parametersRaw, setParametersRaw] = useState('{\n  "variable": "value"\n}');
+  const [isEnabled,     setIsEnabled]     = useState(true);
+  const [saving,        setSaving]        = useState(false);
 
   useEffect(() => {
-    if (open) {
-      setAgentId(initial?.agentId ?? (agents[0]?.id ?? ""));
-      setName(initial?.name ?? "");
-      setDescription(initial?.description ?? "");
-      setScheduleType(initial?.scheduleType ?? "once");
-      setScheduledAt(initial?.scheduledAtUtc ? initial.scheduledAtUtc.slice(0, 16) : "");
-      setRunAtTime(initial?.runAtTime ?? "09:00");
-      setDayOfWeek(initial?.dayOfWeek ?? 1);
-      setTimeZoneId(initial?.timeZoneId ?? "UTC");
-      setPayloadType(initial?.payloadType ?? "prompt");
-      setPromptText(initial?.promptText ?? "");
-      setParametersRaw(
-        initial?.parametersJson
-          ? (() => { try { return JSON.stringify(JSON.parse(initial.parametersJson), null, 2); } catch { return initial.parametersJson; } })()
-          : '{\n  "variable": "value"\n}'
-      );
-      setIsEnabled(initial?.isEnabled ?? true);
-    }
-  }, [open, initial, agents]);
+    if (!open) return;
+    const isClone = mode === "clone";
+    setAgentId(source?.agentId ?? (agents[0]?.id ?? ""));
+    // Clone: append suffix and clear one-time date; Edit/Create: use source as-is
+    setName(source ? (isClone ? `${source.name} (copy)` : source.name) : "");
+    setDescription(source?.description ?? "");
+    setScheduleType(source?.scheduleType ?? "once");
+    // Gap 2 fix: never carry a past one-time date into a clone
+    setScheduledAt(
+      !isClone && source?.scheduledAtUtc ? source.scheduledAtUtc.slice(0, 16) : ""
+    );
+    setRunAtTime(source?.runAtTime ?? "09:00");
+    setDayOfWeek(source?.dayOfWeek ?? 1);
+    setTimeZoneId(source?.timeZoneId ?? "UTC");
+    setPayloadType(source?.payloadType ?? "prompt");
+    setPromptText(source?.promptText ?? "");
+    setParametersRaw(
+      source?.parametersJson
+        ? (() => { try { return JSON.stringify(JSON.parse(source.parametersJson), null, 2); } catch { return source.parametersJson; } })()
+        : '{\n  "variable": "value"\n}'
+    );
+    // Gap 1 fix: clone always starts disabled
+    setIsEnabled(isClone ? false : (source?.isEnabled ?? true));
+  }, [open, mode, source, agents]);
 
   const save = async () => {
     if (!agentId)            { toast.error("Select an agent."); return; }
@@ -379,12 +544,12 @@ function TaskDialog({ open, onOpenChange, initial, agents, onSaved }: TaskDialog
         parametersJson: parsedParams,
         isEnabled,
       };
-      if (editing) {
-        await api.updateSchedule(initial!.id, dto, 1);
+      if (mode === "edit") {
+        await api.updateSchedule(source!.id, dto, 1);
       } else {
         await api.createSchedule(dto, 1);
       }
-      toast.success(editing ? "Schedule updated." : "Schedule created.");
+      toast.success(mode === "edit" ? "Schedule updated." : mode === "clone" ? "Schedule cloned." : "Schedule created.");
       onSaved();
     } catch (e: unknown) { toast.error(String(e)); }
     finally { setSaving(false); }
@@ -394,7 +559,7 @@ function TaskDialog({ open, onOpenChange, initial, agents, onSaved }: TaskDialog
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{editing ? "Edit Schedule" : "New Schedule"}</DialogTitle>
+          <DialogTitle>{mode === "edit" ? "Edit Schedule" : mode === "clone" ? "Clone Schedule" : "New Schedule"}</DialogTitle>
         </DialogHeader>
 
         <div className="grid gap-4 py-2">
@@ -539,7 +704,7 @@ function TaskDialog({ open, onOpenChange, initial, agents, onSaved }: TaskDialog
             <Button variant="outline" disabled={saving}>Cancel</Button>
           </DialogClose>
           <Button onClick={save} disabled={saving}>
-            {saving ? "Saving…" : editing ? "Save Changes" : "Create Schedule"}
+            {saving ? "Saving…" : mode === "edit" ? "Save Changes" : mode === "clone" ? "Clone Schedule" : "Create Schedule"}
           </Button>
         </DialogFooter>
       </DialogContent>

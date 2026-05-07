@@ -942,6 +942,45 @@ export interface ScheduledTaskRun
 export type CreateScheduleDto = Omit<ScheduledTask, "id" | "tenantId" | "lastRunAtUtc" | "nextRunUtc" | "createdAt" | "updatedAt">;
 export type UpdateScheduleDto = Partial<CreateScheduleDto>;
 
+// Export / Import types
+export interface ScheduledTaskExport {
+  agentId: string;
+  name: string;
+  description?: string;
+  scheduleType: string;
+  scheduledAtUtc?: string;
+  runAtTime?: string;
+  dayOfWeek?: number;
+  timeZoneId: string;
+  payloadType: string;
+  promptText: string;
+  parametersJson?: string;
+  isEnabled: boolean;
+}
+
+export interface ScheduleExportEnvelope {
+  version: "1";
+  exportedAt: string;
+  type: "tenant-schedules" | "group-schedules";
+  tasks: ScheduledTaskExport[];
+}
+
+export interface ScheduleImportRequest {
+  tasks: ScheduledTaskExport[];
+  skipConflicts: boolean;
+}
+
+export interface ScheduleImportResult {
+  created: number;
+  skipped: number;
+  skippedNames: string[];
+}
+
+// Group schedule export types (agentType instead of agentId)
+export type GroupScheduledTaskExport = Omit<ScheduledTaskExport, "agentId"> & { agentType: string };
+export type GroupScheduleImportRequest = { tasks: GroupScheduledTaskExport[]; skipConflicts: boolean; };
+export type GroupScheduleImportResult = ScheduleImportResult;
+
 export interface AgentResponse
 {
   success: boolean;
@@ -1225,6 +1264,8 @@ export const api = {
     request<ScheduledTaskRun>(`/api/schedules/${ id }/trigger?tenantId=${ tenantId }`, { method: "POST" }),
   getScheduleRuns: (id: string, tenantId = 1, limit = 50) =>
     request<ScheduledTaskRun[]>(`/api/schedules/${ id }/runs?tenantId=${ tenantId }&limit=${ limit }`),
+  importSchedules: (req: ScheduleImportRequest, tenantId = 1) =>
+    request<ScheduleImportResult>(`/api/schedules/import?tenantId=${ tenantId }`, { method: "POST", body: JSON.stringify(req) }),
 
   // Platform LLM Config — backward-compat singleton accessor
   getPlatformLlmConfig: () =>
@@ -1333,6 +1374,8 @@ export const api = {
     request<void>(`/api/platform/groups/${ groupId }/schedules/${ taskId }`, { method: "DELETE" }),
   setGroupScheduleEnabled: (groupId: number, taskId: string, isEnabled: boolean) =>
     request<void>(`/api/platform/groups/${ groupId }/schedules/${ taskId }/enabled`, { method: "PATCH", body: JSON.stringify({ isEnabled }) }),
+  importGroupSchedules: (groupId: number, req: GroupScheduleImportRequest) =>
+    request<GroupScheduleImportResult>(`/api/platform/groups/${ groupId }/schedules/import`, { method: "POST", body: JSON.stringify(req) }),
 
   // Group LLM Config — default unnamed config (backward compat)
   getGroupLlmConfig: (groupId: number) =>

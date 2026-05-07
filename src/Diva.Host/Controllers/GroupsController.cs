@@ -324,6 +324,45 @@ public class GroupsController : ControllerBase
         catch (KeyNotFoundException) { return NotFound(); }
     }
 
+    // POST /api/platform/groups/{id}/schedules/import
+    [HttpPost("{id:int}/schedules/import")]
+    public async Task<IActionResult> ImportSchedules(
+        int id, [FromBody] GroupScheduleImportRequest dto, CancellationToken ct)
+    {
+        if (RequireMasterAdmin() is { } err) return err;
+        if (dto?.Tasks is null) return BadRequest(new { error = "Request body is required." });
+
+        var existing = (await _groups.GetScheduledTasksAsync(id, ct))
+                           .Select(t => t.Name)
+                           .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        int created = 0;
+        var skippedNames = new List<string>();
+
+        foreach (var task in dto.Tasks)
+        {
+            if (dto.SkipConflicts && existing.Contains(task.Name))
+            {
+                skippedNames.Add(task.Name);
+                continue;
+            }
+
+            Exception? ex = null;
+            try
+            {
+                await _groups.CreateScheduledTaskAsync(id, new CreateGroupTaskDto(
+                    task.AgentType, task.Name, task.Description,
+                    task.ScheduleType, task.ScheduledAtUtc, task.RunAtTime, task.DayOfWeek,
+                    task.TimeZoneId ?? "UTC", task.PayloadType ?? "prompt",
+                    task.PromptText, task.ParametersJson, task.IsEnabled), ct);
+                created++;
+            }
+            catch (Exception e) { ex = e; }
+        }
+
+        return Ok(new GroupScheduleImportResult(created, skippedNames.Count, skippedNames));
+    }
+
     // ── Group LLM Config (default unnamed) ───────────────────────────────────
 
     // GET /api/platform/groups/{id}/llm-config  — default unnamed config
@@ -410,3 +449,26 @@ public class GroupsController : ControllerBase
 }
 
 public record SetEnabledRequest(bool IsEnabled);
+
+public sealed record GroupScheduledTaskExport(
+    string AgentType,
+    string Name,
+    string? Description,
+    string ScheduleType,
+    DateTime? ScheduledAtUtc,
+    string? RunAtTime,
+    int? DayOfWeek,
+    string TimeZoneId,
+    string PayloadType,
+    string PromptText,
+    string? ParametersJson,
+    bool IsEnabled);
+
+public sealed record GroupScheduleImportRequest(
+    List<GroupScheduledTaskExport> Tasks,
+    bool SkipConflicts = true);
+
+public sealed record GroupScheduleImportResult(
+    int Created,
+    int Skipped,
+    List<string> SkippedNames);

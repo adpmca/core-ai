@@ -165,6 +165,50 @@ public class SchedulerController : ControllerBase
         [FromQuery] int limit = 50,
         CancellationToken ct = default)
         => Ok(await _service.GetRunHistoryAsync(EffectiveTenantId(tenantId), id, Math.Clamp(limit, 1, 200), ct));
+
+    // ── POST /api/schedules/import ─────────────────────────────────────────
+    [HttpPost("import")]
+    public async Task<IActionResult> Import(
+        [FromBody] ScheduleImportRequest dto,
+        [FromQuery] int tenantId = 1,
+        CancellationToken ct = default)
+    {
+        if (dto?.Tasks is null) return BadRequest(new { error = "Request body is required." });
+
+        var tid      = EffectiveTenantId(tenantId);
+        var existing = (await _service.ListAsync(tid, ct))
+                           .Select(t => t.Name)
+                           .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        int created = 0;
+        var skippedNames = new List<string>();
+
+        foreach (var task in dto.Tasks)
+        {
+            if (dto.SkipConflicts && existing.Contains(task.Name))
+            {
+                skippedNames.Add(task.Name);
+                continue;
+            }
+
+            Exception? ex = null;
+            try
+            {
+                await _service.CreateAsync(tid, new CreateScheduledTaskRequest(
+                    task.AgentId, task.Name, task.Description,
+                    task.ScheduleType, task.ScheduledAtUtc, task.RunAtTime, task.DayOfWeek,
+                    task.TimeZoneId ?? "UTC", task.PayloadType ?? "prompt",
+                    task.PromptText, task.ParametersJson, task.IsEnabled), ct);
+                created++;
+            }
+            catch (Exception e) { ex = e; }
+
+            if (ex is not null)
+                _logger.LogWarning(ex, "Import: skipping task '{Name}' due to error.", task.Name);
+        }
+
+        return Ok(new ScheduleImportResult(created, skippedNames.Count, skippedNames));
+    }
 }
 
 // ── Request DTOs (inline, following AgentSummaryDto pattern) ───────────────
@@ -198,3 +242,26 @@ public sealed record UpdateScheduledTaskDto(
     bool? IsEnabled);
 
 public sealed record SetEnabledDto(bool IsEnabled);
+
+public sealed record ScheduledTaskExport(
+    string AgentId,
+    string Name,
+    string? Description,
+    string ScheduleType,
+    DateTime? ScheduledAtUtc,
+    string? RunAtTime,
+    int? DayOfWeek,
+    string TimeZoneId,
+    string PayloadType,
+    string PromptText,
+    string? ParametersJson,
+    bool IsEnabled);
+
+public sealed record ScheduleImportRequest(
+    List<ScheduledTaskExport> Tasks,
+    bool SkipConflicts = true);
+
+public sealed record ScheduleImportResult(
+    int Created,
+    int Skipped,
+    List<string> SkippedNames);
