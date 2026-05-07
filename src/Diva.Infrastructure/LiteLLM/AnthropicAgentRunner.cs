@@ -76,6 +76,7 @@ public sealed class AnthropicAgentRunner : IAgentRunner
     private readonly AgentToolExecutor? _agentToolExecutor;
     private readonly ILogger<AnthropicAgentRunner> _logger;
     private readonly IServiceScopeFactory? _scopeFactory;
+    private readonly IToolSelectionStrategy? _toolSelector;
 
     public AnthropicAgentRunner(
         IOptions<LlmOptions> llmOptions,
@@ -100,7 +101,8 @@ public sealed class AnthropicAgentRunner : IAgentRunner
         IReActHookCoordinator? hookCoordinator = null,
         AgentToolProvider? agentToolProvider = null,
         AgentToolExecutor? agentToolExecutor = null,
-        IServiceScopeFactory? scopeFactory = null)
+        IServiceScopeFactory? scopeFactory = null,
+        IToolSelectionStrategy? toolSelector = null)
     {
         _llmOptions        = llmOptions.Value;
         _agentOpts         = agentOptions.Value;
@@ -125,6 +127,7 @@ public sealed class AnthropicAgentRunner : IAgentRunner
         _agentToolExecutor      = agentToolExecutor;
         _logger                 = logger;
         _scopeFactory           = scopeFactory;
+        _toolSelector           = toolSelector;
     }
 
     public async Task<AgentResponse> RunAsync(
@@ -357,6 +360,14 @@ public sealed class AnthropicAgentRunner : IAgentRunner
             var executionMode = Enum.TryParse<AgentExecutionMode>(definition.ExecutionMode, true, out var em)
                 ? em : AgentExecutionMode.Full;
             ReActToolHelper.ApplyExecutionModeFilter(executionMode, definition.ToolBindings, toolClientMap, allMcpTools, _logger);
+
+            // ── Semantic tool pre-filtering (IToolSelectionStrategy) ──────────────
+            if (_toolSelector is not null && allMcpTools.Count > 0)
+            {
+                var llmOverride = new SupervisorLlmOverride(resolvedProvider, effectiveModel, resolvedEndpoint);
+                (allMcpTools, toolClientMap) = await _toolSelector.SelectAsync(
+                    request.Query, allMcpTools, toolClientMap, llmOverride, ct);
+            }
 
             _logger.LogInformation(
                 "Streaming tools: {ToolCount} tool(s) from {ServerCount} MCP server(s): [{ToolNames}]",

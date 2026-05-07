@@ -98,6 +98,19 @@ public sealed class AgentOptions
     public List<string> NeverDeduplicateToolPrefixes { get; set; } =
         ["send_", "create_", "post_", "delete_", "update_"];
 
+    /// <summary>
+    /// Minimum tool count required to trigger semantic pre-filtering via LlmToolSelector.
+    /// When tool count is at or below this threshold the filter is skipped (no LLM call).
+    /// Set to 0 to disable semantic tool filtering entirely. Default 8.
+    /// </summary>
+    public int SemanticToolFilterThreshold { get; set; } = 8;
+
+    /// <summary>
+    /// Maximum number of tools to keep after semantic filtering. Default 6.
+    /// Has no effect when SemanticToolFilterThreshold is 0 or tool count is at/below threshold.
+    /// </summary>
+    public int SemanticToolFilterMaxTools { get; set; } = 6;
+
     public RuleLearningOptions RuleLearning { get; set; } = new();
     public LlmRetryOptions Retry { get; set; } = new();
     public ContextWindowOptions ContextWindow { get; set; } = new();

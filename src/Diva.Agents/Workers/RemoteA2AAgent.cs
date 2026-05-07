@@ -27,11 +27,13 @@ public sealed class RemoteA2AAgent : IStreamableWorkerAgent
 
     public AgentCapability GetCapability() => new()
     {
-        AgentId = _definition.Id,
-        AgentType = _definition.AgentType,
-        Description = _definition.Description,
-        Capabilities = JsonSerializer.Deserialize<string[]>(_definition.Capabilities ?? "[]") ?? [],
-        Priority = 3,
+        AgentId          = _definition.Id,
+        AgentType        = _definition.AgentType,
+        Description      = _definition.Description,
+        Capabilities     = JsonSerializer.Deserialize<string[]>(_definition.Capabilities     ?? "[]") ?? [],
+        SupportedTools   = JsonSerializer.Deserialize<string[]>(_definition.ToolBindings     ?? "[]") ?? [],
+        DelegateAgentIds = JsonSerializer.Deserialize<string[]>(_definition.DelegateAgentIdsJson ?? "[]") ?? [],
+        Priority         = 3,
     };
 
     public async Task<AgentResponse> ExecuteAsync(
@@ -59,27 +61,36 @@ public sealed class RemoteA2AAgent : IStreamableWorkerAgent
         string authScheme = _definition.A2AAuthScheme ?? "Bearer";
         string? customHeader = null;
 
-        if (!string.IsNullOrEmpty(_definition.A2ASecretRef) && _credentialResolver is not null)
+        if (!string.IsNullOrEmpty(_definition.A2ASecretRef))
         {
-            var resolved = await _credentialResolver.ResolveAsync(tenant.TenantId, _definition.A2ASecretRef, ct);
-            if (resolved is not null)
+            if (_credentialResolver is not null)
             {
-                authToken = resolved.ApiKey;
-                authScheme = resolved.AuthScheme;
-                customHeader = resolved.CustomHeaderName;
+                var resolved = await _credentialResolver.ResolveAsync(tenant.TenantId, _definition.A2ASecretRef, ct);
+                if (resolved is not null)
+                {
+                    authToken = resolved.ApiKey;
+                    authScheme = resolved.AuthScheme;
+                    customHeader = resolved.CustomHeaderName;
+                }
+                else
+                {
+                    // Credential name not found in vault — fail fast rather than forwarding
+                    // the ref name as a token (which always causes 401 on the remote).
+                    yield return new AgentStreamChunk
+                    {
+                        Type    = "error",
+                        Content = $"A2A credential '{_definition.A2ASecretRef}' not found in the credential vault for this tenant. " +
+                                  "Add it in Settings → MCP Credentials, then retry.",
+                    };
+                    yield return new AgentStreamChunk { Type = "done" };
+                    yield break;
+                }
             }
             else
             {
-                // Credential name not found in vault — fail fast with a clear message rather
-                // than silently forwarding the ref name as a token (which always causes 401).
-                yield return new AgentStreamChunk
-                {
-                    Type    = "error",
-                    Content = $"A2A credential '{_definition.A2ASecretRef}' not found in the credential vault for this tenant. " +
-                              "Add it in Settings → MCP Credentials, then retry.",
-                };
-                yield return new AgentStreamChunk { Type = "done" };
-                yield break;
+                // No vault configured — treat secretRef as the literal token value.
+                // Useful for dev/test environments and simple direct-token deployments.
+                authToken = _definition.A2ASecretRef;
             }
         }
 

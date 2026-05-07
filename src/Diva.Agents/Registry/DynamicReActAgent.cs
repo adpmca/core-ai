@@ -27,14 +27,24 @@ public sealed class DynamicReActAgent : IWorkerAgent, IStreamableWorkerAgent
             ? Array.Empty<string>()
             : JsonSerializer.Deserialize<string[]>(_definition.Capabilities) ?? [];
 
+        var tools = string.IsNullOrEmpty(_definition.ToolBindings)
+            ? Array.Empty<string>()
+            : JsonSerializer.Deserialize<string[]>(_definition.ToolBindings) ?? [];
+
+        var delegates = string.IsNullOrEmpty(_definition.DelegateAgentIdsJson)
+            ? Array.Empty<string>()
+            : JsonSerializer.Deserialize<string[]>(_definition.DelegateAgentIdsJson) ?? [];
+
         return new AgentCapability
         {
-            AgentId      = _definition.Id,
-            AgentType    = _definition.AgentType,
-            Description  = _definition.Description,
-            Capabilities = caps,
+            AgentId          = _definition.Id,
+            AgentType        = _definition.AgentType,
+            Description      = _definition.Description,
+            Capabilities     = caps,
+            SupportedTools   = tools,
+            DelegateAgentIds = delegates,
             // Dynamic agents have lower priority than statically registered agents
-            Priority     = 5
+            Priority         = 5
         };
     }
 

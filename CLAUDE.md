@@ -72,7 +72,7 @@ Update status in INDEX.md when moving a phase from `[ ]` → `[~]` → `[x]`.
 **All three tiers and Phases 1–18 + Phase 22 are complete.** Auth/SSO login flow and multi-tenant isolation are now active (2026-03-25). Two items remain deferred:
 
 ### Remaining Work
-- **Phase 19** (not started): Coordinator Sub-Agent Routing — `OrchestratorAgent`, `ScopedAgentRegistry`, LLM-based `DecomposeStage`. Foundation laid by Phase 14 agents-as-tools. See [docs/phase-19-coordinator-sub-agent-routing.md](docs/phase-19-coordinator-sub-agent-routing.md).
+- **Phase 19** (foundation complete [2026-05-06]): Coordinator Sub-Agent Routing — foundation (7-gap SOLID refactor, `LlmDecompositionStrategy`, `AgentContextStage`, `IReadableAgentRegistry`, `ICapabilityScoringService`, `ResponseSynthesizer`, `IToolSelectionStrategy`/`LlmToolSelector`) is complete. Remaining: `OrchestratorAgent`, `ScopedAgentRegistry`, `SubAgentIdsJson` DB field, `SubAgentSelector.tsx`. See [docs/phase-19-coordinator-sub-agent-routing.md](docs/phase-19-coordinator-sub-agent-routing.md).
 - **Phase 5** (deferred): `AnalyticsMcpServer`, `ReservationMcpServer` — domain MCP tool servers. Deferred until real data backends are available.
 
 ### What's Complete
@@ -90,6 +90,7 @@ Update status in INDEX.md when moving a phase from `[ ]` → `[~]` → `[x]`.
 - **Continuation Windows** — outer loop wraps unified `ExecuteReActLoopAsync`, `MaxContinuations` config (global + per-agent), `continuation_start` SSE event ✓
 - **Tool Error Retry** — `hadToolErrors` flag, acknowledgment loop fix, JSON error detection ✓
 - **MCP Credential Vault + Platform API Keys** — AES-256-GCM encrypted credential store, `CredentialRef` per MCP binding, 3-tier auth (SSO → credential → tenant headers), platform API keys (`diva_` prefix, SHA-256 hashed), `X-API-Key` middleware, scheduled task fallback tenant flow, admin UI (`/settings/credentials`, `/settings/api-keys`), structured MCP call logging ✓
+- **Phase 19 Foundation** — 7-gap SOLID refactor: `AgentContextStage`, `IReadableAgentRegistry`, `ICapabilityScoringService`, `LlmDecompositionStrategy` + `SingleTaskStrategy` + `DecompositionStrategySelector`, `ResponseSynthesizer`, `SupervisorLlmOverride`, `VerifyStage` multi-agent fix ✓; `IToolSelectionStrategy` / `LlmToolSelector` semantic tool pre-filter (single-agent+tools optimization, multi-agent compatible) ✓
 
 **Note on Phase 9:** `LlmClientFactory`/`LiteLLMClient` were never built — design shifted to `AnthropicAgentRunner` (direct provider). LiteLLM is supported by pointing `DirectProvider` at the LiteLLM proxy URL. This is not a gap.
 

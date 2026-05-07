@@ -11,6 +11,13 @@ public sealed record AgentCapability
     public string[] Capabilities { get; init; } = [];
     public string[] SupportedTools { get; init; } = [];
 
+    /// <summary>
+    /// Agent IDs this agent can delegate to as peer tools (from DelegateAgentIdsJson).
+    /// Included in the decompose prompt so the LLM knows an agent's effective reach
+    /// extends beyond its direct MCP tools.
+    /// </summary>
+    public string[] DelegateAgentIds { get; init; } = [];
+
     /// <summary>Higher priority = preferred when multiple agents match.</summary>
     public int Priority { get; init; } = 10;
 }

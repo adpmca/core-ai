@@ -4,6 +4,55 @@
 
 ---
 
+## [2026-05-06] Phase 19 Foundation — Supervisor Pipeline SOLID Refactor + Semantic Tool Pre-Filter
+
+Seven-gap analysis of the Phase 19 supervisor pipeline foundation. All gaps resolved with SOLID-aligned
+new components. Semantic tool pre-filtering added for single-agent+tools scenarios (mirrors Phase 19
+`LlmDecompositionStrategy` at the intra-agent tool level).
+
+### New files
+
+| File | Description |
+|------|-------------|
+| `src/Diva.Agents/Supervisor/Stages/AgentContextStage.cs` | New pipeline stage: loads available agents from `IReadableAgentRegistry` into `SupervisorState`; replaces ad-hoc inline loading (SRP fix) |
+| `src/Diva.Agents/Registry/IReadableAgentRegistry.cs` | Read-only registry interface for supervisor stages (ISP / DIP fix) |
+| `src/Diva.Agents/Registry/ICapabilityScoringService.cs` | Capability scoring interface (OCP fix — swappable scorers) |
+| `src/Diva.Agents/Registry/CapabilityScoringService.cs` | Default implementation: cosine-style keyword intersection scorer |
+| `src/Diva.Agents/Supervisor/Decompose/` | Decomposition strategy directory: `IDecompositionStrategy`, `SingleTaskStrategy`, `LlmDecompositionStrategy`, `DecompositionStrategySelector` |
+| `src/Diva.Core/Models/SupervisorLlmOverride.cs` | `record SupervisorLlmOverride(Provider, Model, Endpoint?)` — shared LLM config carrier for supervisor + tool selector |
+| `src/Diva.Infrastructure/Synthesis/ResponseSynthesizer.cs` | `IResponseSynthesizer` + `ResponseSynthesizer` — multi-agent result synthesis extracted from `IntegrateStage` (SRP fix) |
+| `src/Diva.Infrastructure/LiteLLM/IToolSelectionStrategy.cs` | Strategy interface for semantic tool pre-filtering |
+| `src/Diva.Infrastructure/LiteLLM/LlmToolSelector.cs` | LLM-based tool pre-filter — fires one lightweight LLM call (name+description, no schemas) when tool count exceeds `SemanticToolFilterThreshold`; safe fallback on any error |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `src/Diva.Agents/Registry/DynamicAgentRegistry.cs` | Implements `IReadableAgentRegistry` alongside existing `IAgentRegistry` |
+| `src/Diva.Agents/Registry/IAgentRegistry.cs` | Extended: `IReadableAgentRegistry` base interface separation |
+| `src/Diva.Agents/Registry/DynamicReActAgent.cs` | Uses capability scoring via `ICapabilityScoringService` |
+| `src/Diva.Agents/Workers/AgentCapability.cs` | `AgentCapability` model updated to carry `AgentType` for multi-agent routing |
+| `src/Diva.Agents/Supervisor/Stages/DecomposeStage.cs` | Uses `DecompositionStrategySelector` (OCP: open to new strategies without touching stage); adds `LogInformation` before calling strategy |
+| `src/Diva.Agents/Supervisor/Stages/CapabilityMatchStage.cs` | Uses `ICapabilityScoringService` via DI; promoted to `LogInformation` with agent+type+caps detail |
+| `src/Diva.Agents/Supervisor/Stages/IntegrateStage.cs` | Delegates synthesis to `IResponseSynthesizer` (SRP fix) |
+| `src/Diva.Agents/Supervisor/Stages/VerifyStage.cs` | Multi-agent fix: verifies integrated result, not raw parallel sub-task outputs |
+| `src/Diva.Agents/Supervisor/SupervisorState.cs` | Added `AvailableAgents` property populated by `AgentContextStage` |
+| `src/Diva.Agents/Workers/RemoteA2AAgent.cs` | Fixed pre-existing test failure: raw `A2ASecretRef` used as literal token when no credential resolver present (dev/simple deployments) |
+| `src/Diva.Core/Configuration/AgentOptions.cs` | Added `SemanticToolFilterThreshold` (default 8) and `SemanticToolFilterMaxTools` (default 6) |
+| `src/Diva.Host/Program.cs` | Registered all Phase 19 foundation services + Phase 23 DI fix (IOfficeReader, IOfficeWriter, FileWriteLock, ScriptThrottle) + `IToolSelectionStrategy`/`LlmToolSelector` |
+| `src/Diva.Infrastructure/LiteLLM/AnthropicAgentRunner.cs` | Optional `IToolSelectionStrategy?` constructor param; injected after `ApplyExecutionModeFilter`, before `strategy.Initialize()` |
+| `tests/Diva.Tools.Tests/Helpers/McpToolsTestFixtures.cs` | Fixed Phase 23 constructor — added OfficeReader, OfficeWriter, FileWriteLock, ScriptThrottle params |
+
+### Key design decisions
+
+- `IToolSelectionStrategy` optional param in `AnthropicAgentRunner` (last in optional list) — 3 test files that construct it directly compile unchanged
+- `SupervisorLlmOverride` record reused from `Diva.Core.Models` for both `LlmDecompositionStrategy` and `LlmToolSelector`
+- Multi-agent compatibility: `DispatchStage` sets `AgentRequest.Query = task.Description` (sub-task), so each worker agent independently filters its own tools against its specific sub-task
+- `SemanticToolFilterThreshold = 0` disables the filter; tool count ≤ threshold skips LLM call with no-op
+- Logging: `LlmToolSelector: N tools — skipped`, `LlmToolSelector: N tools → calling {Provider} model={Model}`, `LlmToolSelector: selected N/M tools in Xms`
+
+---
+
 ## [2026-04-30] Phase 23.1 — Standalone MCP Server JWT Authentication
 
 Upgraded `DivaFsMcpServer` from plaintext static-key comparison to a proper JWT client-credentials

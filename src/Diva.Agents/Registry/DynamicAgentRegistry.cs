@@ -25,6 +25,7 @@ public sealed class DynamicAgentRegistry : IAgentRegistry
     private readonly ICredentialResolver? _credentialResolver;
     private readonly IGroupAgentOverlayService _overlayService;
     private readonly ITenantGroupService _groupService;
+    private readonly ICapabilityScoringService _scorer;
     private readonly ILogger<DynamicAgentRegistry> _logger;
 
     // Statically registered agents (code-defined, registered at startup)
@@ -37,6 +38,7 @@ public sealed class DynamicAgentRegistry : IAgentRegistry
         IGroupAgentOverlayService overlayService,
         ITenantGroupService groupService,
         ILogger<DynamicAgentRegistry> logger,
+        ICapabilityScoringService? scorer = null,
         ICredentialResolver? credentialResolver = null)
     {
         _db                  = db;
@@ -45,6 +47,7 @@ public sealed class DynamicAgentRegistry : IAgentRegistry
         _credentialResolver  = credentialResolver;
         _overlayService      = overlayService;
         _groupService        = groupService;
+        _scorer              = scorer ?? new CapabilityScoringService();
         _logger              = logger;
     }
 
@@ -140,21 +143,6 @@ public sealed class DynamicAgentRegistry : IAgentRegistry
             return null;
         }
 
-        // If no specific capabilities required, return highest-priority agent
-        if (requiredCapabilities.Length == 0)
-            return agents.OrderByDescending(a => a.GetCapability().Priority).First();
-
-        var best = agents
-            .Select(a => (Agent: a, Score: a.GetCapability().Capabilities
-                .Intersect(requiredCapabilities, StringComparer.OrdinalIgnoreCase)
-                .Count()))
-            .Where(x => x.Score > 0)
-            .OrderByDescending(x => x.Score)
-            .ThenByDescending(x => x.Agent.GetCapability().Priority)
-            .Select(x => x.Agent)
-            .FirstOrDefault();
-
-        // Fallback: if no capability match, use highest-priority agent
-        return best ?? agents.OrderByDescending(a => a.GetCapability().Priority).First();
+        return _scorer.FindBestMatch(agents, requiredCapabilities);
     }
 }

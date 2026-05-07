@@ -1,6 +1,7 @@
 using Diva.Tools.FileSystem;
 using Diva.Tools.FileSystem.Abstractions;
 using Diva.Tools.FileSystem.Readers;
+using Diva.Tools.FileSystem.Writers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -57,7 +58,11 @@ public static class McpToolsTestFixtures
             new ToolFilter(AsOptions(opts)),
             new PdfReader(NullLogger<PdfReader>.Instance),
             new ImageReader(NullLogger<ImageReader>.Instance),
+            new OfficeReader(NullLogger<OfficeReader>.Instance),
+            new OfficeWriter(NullLogger<OfficeWriter>.Instance),
             AsOptions(opts),
+            new FileWriteLock(),
+            new ScriptThrottle(AsOptions(opts)),
             NullLogger<FileSystemMcpTools>.Instance);
 
         return (tools, tempDir);

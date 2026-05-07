@@ -19,7 +19,9 @@ using Diva.Infrastructure.Context;
 using Diva.Infrastructure.LiteLLM;
 using Diva.Infrastructure.Scheduler;
 using Diva.Infrastructure.Sessions;
+using Diva.Infrastructure.Synthesis;
 using Diva.Infrastructure.Verification;
+using Diva.Agents.Supervisor.Decompose;
 using Diva.Sso;
 using Diva.TenantAdmin.Prompts;
 using Diva.TenantAdmin.Services;
@@ -28,6 +30,7 @@ using Diva.Tools.Core;
 using Diva.Tools.FileSystem;
 using Diva.Tools.FileSystem.Abstractions;
 using Diva.Tools.FileSystem.Readers;
+using Diva.Tools.FileSystem.Writers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
@@ -181,6 +184,10 @@ builder.Services.AddScoped<IFileSystemPathGuard, FileSystemPathGuard>();
 builder.Services.AddScoped<IToolFilter, ToolFilter>();
 builder.Services.AddScoped<IPdfReader, PdfReader>();
 builder.Services.AddScoped<IImageReader, ImageReader>();
+builder.Services.AddScoped<IOfficeReader, OfficeReader>();
+builder.Services.AddScoped<IOfficeWriter, OfficeWriter>();
+builder.Services.AddSingleton<FileWriteLock>();
+builder.Services.AddSingleton<ScriptThrottle>();
 builder.Services
     .AddMcpServer(opts => opts.ServerInfo = new() { Name = "diva-mcp", Version = "1.0" })
     .WithHttpTransport()
@@ -207,10 +214,32 @@ builder.Services.AddHttpClient<IA2AAgentClient, A2AAgentClient>()
     .AddStandardResilienceHandler();
 
 // ── Phase 8: Supervisor pipeline ───────────────────────────────────────────
+
+// Registry — one DynamicAgentRegistry singleton satisfies both interfaces
 builder.Services.AddSingleton<IAgentRegistry, DynamicAgentRegistry>();
+builder.Services.AddSingleton<IReadableAgentRegistry>(
+    sp => sp.GetRequiredService<IAgentRegistry>());
+builder.Services.AddSingleton<ICapabilityScoringService, CapabilityScoringService>();
+
+// Decomposition strategies — SingleTaskStrategy registered twice so both the selector
+// (via IEnumerable<IDecompositionStrategy>) and LlmDecompositionStrategy (direct ctor
+// injection as fallback) resolve the same singleton instance.
+builder.Services.AddSingleton<SingleTaskStrategy>();
+builder.Services.AddSingleton<IDecompositionStrategy>(
+    sp => sp.GetRequiredService<SingleTaskStrategy>());           // Priority = 0
+builder.Services.AddSingleton<IDecompositionStrategy, LlmDecompositionStrategy>(); // Priority = 10
+builder.Services.AddSingleton<DecompositionStrategySelector>();
+
+// Synthesis
+builder.Services.AddSingleton<IResponseSynthesizer, ResponseSynthesizer>();
+
+// Semantic tool pre-filtering — narrows tool list to query-relevant subset before ReAct loop
+builder.Services.AddSingleton<IToolSelectionStrategy, LlmToolSelector>();
+
 builder.Services.AddSingleton<IAgentDelegationResolver, DelegationAgentResolver>();
 
-// Pipeline stages registered in execution order (all Singleton — no scoped deps)
+// Pipeline stages in execution order (all Singleton — no scoped deps)
+builder.Services.AddSingleton<ISupervisorPipelineStage, AgentContextStage>();  // pre-fetch agents
 builder.Services.AddSingleton<ISupervisorPipelineStage, DecomposeStage>();
 builder.Services.AddSingleton<ISupervisorPipelineStage, CapabilityMatchStage>();
 builder.Services.AddSingleton<ISupervisorPipelineStage, DispatchStage>();

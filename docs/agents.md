@@ -4,7 +4,7 @@
 
 ---
 
-## Current Platform State (as of 2026-04-20)
+## Current Platform State (as of 2026-05-06)
 
 All implementation phases complete except Coordinator Sub-Agent Routing (Phase 19) and domain MCP tool servers (Phase 5 partial). The primary execution engine is `AnthropicAgentRunner` — the planned `LlmClientFactory`/`LiteLLMClient` were superseded by the strategy pattern.
 
@@ -24,6 +24,8 @@ All implementation phases complete except Coordinator Sub-Agent Routing (Phase 1
 - Per-iteration model switching: model (and provider) can change between iterations driven by three hook layers in priority order — Rule Pack `model_switch` rule (Order=2), `StaticModelSwitcherHook` JSON config (Order=3), `ModelRouterHook` Variables heuristics (Order=4). Cross-provider switches use `ExportHistory`/`ImportHistory` on `ILlmProviderStrategy`. SSE event `model_switch` is emitted on each switch.
 - Instruction flow: `AgentRequest.Instructions` → supervisor pipeline → system prompt
 - `effectiveMaxOutputTokens = definition.MaxOutputTokens ?? _agentOpts.MaxOutputTokens` — passed to both provider strategies
+- **Semantic tool pre-filter (2026-05-06):** `IToolSelectionStrategy?` optional dep. When registered (`LlmToolSelector`), fires one lightweight LLM call after `ApplyExecutionModeFilter` to narrow the tool set before the ReAct loop. Only fires when `allMcpTools.Count > AgentOptions.SemanticToolFilterThreshold` (default 8). Keeps at most `SemanticToolFilterMaxTools` (default 6). Multi-agent: each worker independently filters against its own sub-task description. Safe fallback to full list on any error.
+
 **Credential forwarding (2026-04-16):**
  - MCP tool calls now use only the resolved `CredentialRef` for outbound authentication. The inbound Diva platform API key (`X-API-Key`) is never forwarded to MCP servers. This fixes a prior security bug where the inbound API key could be leaked to external tool servers.
  - A2A agent calls (remote agent-to-agent) still use the inbound API key for platform authentication, but it is not used for MCP tool calls.
@@ -63,7 +65,7 @@ If you see `"x-api-key header is required"` errors from the Anthropic SDK, check
 | `src/Diva.Infrastructure/LiteLLM/ILlmProviderStrategy.cs` | Strategy interface + unified types (UnifiedLlmResponse, UnifiedToolCall, UnifiedToolResult) |
 | `src/Diva.Infrastructure/LiteLLM/AnthropicProviderStrategy.cs` | Anthropic SDK strategy implementation |
 | `src/Diva.Infrastructure/LiteLLM/OpenAiProviderStrategy.cs` | OpenAI-compatible strategy (raw IChatClient, no UseFunctionInvocation) |
-| `src/Diva.Core/Configuration/AgentOptions.cs` | All agent config (MaxIterations, MaxContinuations, Retry, ContextWindow, ...) |
+| `src/Diva.Core/Configuration/AgentOptions.cs` | All agent config (MaxIterations, MaxContinuations, Retry, ContextWindow, SemanticToolFilter, ...) |
 | `src/Diva.Core/Models/AgentStreamChunk.cs` | SSE event model — add fields and type docs here when adding new events |
 | `src/Diva.Infrastructure/Context/ContextWindowManager.cs` | Point A + Point B compaction |
 | `src/Diva.Infrastructure/Verification/ResponseVerifier.cs` | All verification modes |
@@ -73,6 +75,13 @@ If you see `"x-api-key header is required"` errors from the Anthropic SDK, check
 | `tests/Diva.Agents.Tests/ProviderStrategyTests.cs` | Strategy + FilterTools + instruction flow tests |
 | `tests/Diva.Agents.Tests/ContextWindowTests.cs` | Context window unit + integration tests |
 | `tests/Diva.Agents.Tests/Helpers/AgentTestFixtures.cs` | Shared test helpers (BasicAgent, BasicRequest, Opts, ...) |
+| `src/Diva.Agents/Registry/IReadableAgentRegistry.cs` | Read-only registry interface used by supervisor stages (ISP/DIP) |
+| `src/Diva.Agents/Registry/ICapabilityScoringService.cs` | Swappable capability scorer interface |
+| `src/Diva.Agents/Registry/CapabilityScoringService.cs` | Default keyword intersection scorer |
+| `src/Diva.Agents/Supervisor/Decompose/` | Decomposition strategies: `IDecompositionStrategy`, `SingleTaskStrategy`, `LlmDecompositionStrategy`, `DecompositionStrategySelector` |
+| `src/Diva.Infrastructure/LiteLLM/IToolSelectionStrategy.cs` | Tool pre-filter strategy interface |
+| `src/Diva.Infrastructure/LiteLLM/LlmToolSelector.cs` | LLM-based tool pre-filter (fires when tools > `SemanticToolFilterThreshold`) |
+| `src/Diva.Infrastructure/Synthesis/ResponseSynthesizer.cs` | `IResponseSynthesizer` — multi-agent result synthesis |
 | `tests/Diva.Agents.Tests/Helpers/ContextWindowTestHelpers.cs` | `NoOpCtx()` NSubstitute mock for `IContextWindowManager` |
 | `src/Diva.Host/Controllers/AuthController.cs` | SSO login, callback (issues local JWT), logout routing, `/api/auth/me` |
 | `src/Diva.Infrastructure/Auth/LocalAuthService.cs` | `IssueJwt` + `IssueSsoJwt` — local JWT issuance for both local and SSO users |

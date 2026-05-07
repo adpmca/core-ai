@@ -5,29 +5,38 @@ namespace Diva.Agents.Supervisor.Stages;
 
 /// <summary>
 /// Matches each sub-task to the best available worker agent using capability scoring.
-/// Sets DispatchPlan on the state.
+/// Uses state.AvailableAgents pre-fetched by AgentContextStage (no extra DB call).
+/// Falls back to IReadableAgentRegistry.GetAgentsForTenantAsync when AvailableAgents
+/// is empty (e.g. unit tests running this stage in isolation).
 /// </summary>
 public sealed class CapabilityMatchStage : ISupervisorPipelineStage
 {
-    private readonly IAgentRegistry _registry;
+    private readonly IReadableAgentRegistry _registry;
+    private readonly ICapabilityScoringService _scorer;
     private readonly ILogger<CapabilityMatchStage> _logger;
 
-    public CapabilityMatchStage(IAgentRegistry registry, ILogger<CapabilityMatchStage> logger)
+    public CapabilityMatchStage(
+        IReadableAgentRegistry registry,
+        ICapabilityScoringService scorer,
+        ILogger<CapabilityMatchStage> logger)
     {
         _registry = registry;
+        _scorer   = scorer;
         _logger   = logger;
     }
 
     public async Task<SupervisorState> ExecuteAsync(SupervisorState state, CancellationToken ct)
     {
+        // Reuse agents pre-fetched by AgentContextStage; fall back to direct fetch when absent.
+        var agents = state.AvailableAgents.Count > 0
+            ? state.AvailableAgents
+            : await _registry.GetAgentsForTenantAsync(state.TenantContext.TenantId, ct);
+
         var plan = new List<(SubTask, Diva.Agents.Workers.IWorkerAgent)>();
 
         foreach (var task in state.SubTasks)
         {
-            var agent = await _registry.FindBestMatchAsync(
-                task.RequiredCapabilities,
-                state.TenantContext.TenantId,
-                ct);
+            var agent = _scorer.FindBestMatch(agents, task.RequiredCapabilities);
 
             if (agent is null)
             {
@@ -36,9 +45,12 @@ public sealed class CapabilityMatchStage : ISupervisorPipelineStage
                 continue;
             }
 
-            _logger.LogDebug("Matched task to agent {AgentId} (capabilities={Caps})",
-                agent.GetCapability().AgentId,
-                string.Join(", ", agent.GetCapability().Capabilities));
+            var cap = agent.GetCapability();
+            _logger.LogInformation(
+                "CapabilityMatch: sub-task matched agent={AgentId} type={AgentType} caps=[{Caps}] task={Desc}",
+                cap.AgentId, cap.AgentType,
+                string.Join(", ", cap.Capabilities),
+                task.Description);
 
             plan.Add((task, agent));
         }

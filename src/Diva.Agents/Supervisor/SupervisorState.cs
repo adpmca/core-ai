@@ -1,3 +1,4 @@
+using Diva.Agents.Registry;
 using Diva.Agents.Workers;
 using Diva.Core.Models;
 using Diva.Infrastructure.Sessions;
@@ -16,6 +17,25 @@ public sealed class SupervisorState
     // Session (loaded by SupervisorAgent before pipeline starts)
     public string SessionId { get; set; } = "";
     public List<ConversationTurn> SessionHistory { get; set; } = [];
+
+    /// <summary>
+    /// Pre-fetched by AgentContextStage. Eliminates duplicate DB round trips between
+    /// DecomposeStage (LLM context) and CapabilityMatchStage (routing). Empty = not yet fetched.
+    /// </summary>
+    public List<IWorkerAgent> AvailableAgents { get; set; } = [];
+
+    /// <summary>
+    /// Set by OrchestratorAgent (Phase 19) to restrict the pipeline to a specific sub-agent set.
+    /// When non-null, AgentContextStage uses this instead of the global registry.
+    /// </summary>
+    public IReadableAgentRegistry? ScopedRegistry { get; set; }
+
+    /// <summary>
+    /// Resolved LLM provider context for supervisor-level calls (decompose, synthesis).
+    /// Set by OrchestratorAgent (Phase 19) from the coordinator agent's resolved LlmConfig.
+    /// Null = use global platform defaults — backward compatible.
+    /// </summary>
+    public SupervisorLlmOverride? LlmOverride { get; set; }
 
     // Set by DecomposeStage
     public List<SubTask> SubTasks { get; set; } = [];
