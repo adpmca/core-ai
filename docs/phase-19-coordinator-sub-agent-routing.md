@@ -1,10 +1,24 @@
 # Phase 19 — UI-Configurable Coordinator Agent with Explicit Sub-Agent Routing (Local + Remote A2A)
 
-> **Status:** `[ ]` Not Started
+> **Status:** `[~]` Foundation Complete — Remaining work is an enhancement, not a critical gap
 > **Depends on:** [phase-08-agents.md](phase-08-agents.md), [phase-14-a2a.md](phase-14-a2a.md) (Agents-as-Tools complete)
 > **Blocks:** Nothing
 > **Project:** `Diva.Agents`, `Diva.Infrastructure`, `Diva.Host`, `admin-portal`
 > **Estimated test count:** ~20 new tests
+
+## When You Need This vs Phase 14
+
+**Phase 14 Agents-as-Tools (already live) covers most use cases:**
+- Create a coordinator agent with a system prompt describing its orchestration role
+- Use `DelegateAgentSelector` in AgentBuilder to pick peer sub-agents (`DelegateAgentIdsJson`)
+- The coordinator LLM calls sub-agents as tools during its ReAct loop — sequential or ad-hoc
+- Works for 2–4 sub-agents, LLM-driven routing, conversational multi-step flows
+
+**Phase 19 is needed only when:**
+- You require **true parallel dispatch** (N sub-tasks running concurrently at the pipeline level, not tool-call level)
+- You need **hard agent isolation** — coordinator must be physically prevented from seeing other tenant agents
+- You need **deterministic upfront decomposition** with an auditable sub-task assignment plan (regulated environments)
+- You have 5+ sub-agents and keyword capability matching is insufficient
 
 ## Context
 
@@ -16,8 +30,8 @@ list in the UI. The `DecomposeStage` also only creates one sub-task (MVP).
 delegation via the tool pipeline — one agent calls another as a tool during its ReAct loop. Phase 19
 is different: it creates a **supervisor pipeline** over a scoped agent set, with LLM-based task
 decomposition, parallel dispatch, and result integration. The two features are complementary:
-- **Agents-as-Tools** = ad-hoc peer delegation within a single agent's ReAct loop
-- **Coordinator** = structured multi-agent orchestration with decomposition + integration
+- **Agents-as-Tools (Phase 14)** = ad-hoc peer delegation within a single agent's ReAct loop — LLM-driven, sequential, UI-configurable today
+- **Coordinator (Phase 19)** = structured pipeline orchestration — deterministic decomposition, parallel dispatch, scoped registry
 
 This phase adds:
 - A `SubAgentIdsJson` field on `AgentDefinitionEntity` (list of pinned agent IDs)

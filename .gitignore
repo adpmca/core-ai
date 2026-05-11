@@ -1,13 +1,10 @@
-# Build outputs
+d outputs
 **/bin/
 **/obj/
 
 # Test and coverage artifacts
-TestResults/
-coverage/
-coverage-*/
-*.coverage
-*.coveragexml
+TestRcoverage-*/
+*.cexml
 
 # IDE and editor state
 .vs/
@@ -43,3 +40,6 @@ appsettings.Development.json
 
 # Published build outputs
 publish/
+.claude/settings.local.json
+.claude/settings.local.json
+.claude/settings.local.json

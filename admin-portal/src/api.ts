@@ -60,6 +60,7 @@ export interface AgentDefinition
   toolBindings?: string;   // JSON array string
   verificationMode?: string;       // Off|ToolGrounded|LlmVerifier|Strict|Auto
   contextWindowJson?: string;      // JSON ContextWindowOverrideOptions
+  optimizationOverrideJson?: string; // JSON OptimizationOverrideOptions e.g. {"MergeMaxTokens":16384}
   customVariablesJson?: string;    // JSON Dictionary<string,string>
   maxContinuations?: number;       // null = global default
   maxToolResultChars?: number;     // null = global default (AgentOptions.MaxToolResultChars)
@@ -1081,6 +1082,8 @@ export const api = {
   getAgent: (id: string) => request<AgentDefinition>(`/api/agents/${ id }`),
   createAgent: (dto: AgentDefinition) => request<AgentDefinition>("/api/agents", { method: "POST", body: JSON.stringify(dto) }),
   updateAgent: (id: string, dto: AgentDefinition) => request<AgentDefinition>(`/api/agents/${ id }`, { method: "PUT", body: JSON.stringify(dto) }),
+  improvePrompt: (id: string, instruction: string) =>
+    request<{ improvedPrompt: string }>(`/api/agents/${ id }/prompt/improve`, { method: "POST", body: JSON.stringify({ instruction }) }),
   deleteAgent: (id: string) => request<void>(`/api/agents/${ id }`, { method: "DELETE" }),
   getLlmConfig: (llmConfigId?: number) =>
     request<LlmConfig>(llmConfigId ? `/api/config/llm?llmConfigId=${ llmConfigId }` : "/api/config/llm"),
@@ -1823,5 +1826,267 @@ export interface SessionListParams
   hasErrors?: boolean;
   page?: number;
   pageSize?: number;
+}
+
+// ── Phase 24: Agent Optimization ──────────────────────────────────────────────
+
+export interface OptimizationRunSummary
+{
+  id: number;
+  agentId: string;
+  sessionId?: string;
+  startedAt: string;
+  completedAt?: string;
+  status: string;
+  triggerSource: string;
+  sessionsAnalyzed: number;
+  turnsAnalyzed: number;
+  suggestionCount: number;
+}
+
+export interface SessionAnalysisReport
+{
+  agentId: string;
+  sessionId?: string;
+  totalSessions: number;
+  totalTurns: number;
+  scoredTurns: number;
+  avgFaithfulness?: number;
+  avgCompleteness?: number;
+  avgToolEfficiency?: number;
+  avgCoherence?: number;
+  verificationFailureRate: number;
+  correctionRetryRate: number;
+  maxIterationsHitRate: number;
+  toolErrorRate: number;
+  averageIterationsPerTurn: number;
+  frequentToolErrors: string[];
+  sampleTurnContent: string[];
+}
+
+export interface OptimizationRunDetail extends OptimizationRunSummary
+{
+  report?: SessionAnalysisReport;
+  suggestions: OptimizationSuggestion[];
+  errorMessage?: string;
+}
+
+export interface OptimizationSuggestion
+{
+  id: number;
+  runId: number;
+  agentId: string;
+  type: string;
+  fieldName: string;
+  currentValue?: string;
+  suggestedValue: string;
+  confidence: number;
+  reasoning: string;
+  status: string;
+  reviewedBy?: string;
+  reviewNotes?: string;
+  reviewedAt?: string;
+  createdAt: string;
+}
+
+export interface OptimizationScheduleConfig
+{
+  scheduleType: string;
+  runAtTime?: string;
+  runOnDayOfWeek?: number;
+  timezone: string;
+  isEnabled: boolean;
+  nextRunAt?: string;
+  lastScheduledRunAt?: string;
+}
+
+export interface FewShotExample
+{
+  id: number;
+  agentId: string;
+  sourceSessionId?: string;
+  sourceTurnNumber?: number;
+  userMessage: string;
+  assistantMessage: string;
+  description?: string;
+  sortOrder: number;
+  isEnabled: boolean;
+  createdAt: string;
+  createdBy?: string;
+}
+
+// ── API fetch functions ───────────────────────────────────────────────────────
+
+export async function triggerOptimizationRun(
+  agentId: string,
+  opts: { from?: string; to?: string; sessionId?: string; userContext?: string } = {}
+): Promise<{ runId: number }>
+{
+  const r = await fetch(`${ BASE }/api/admin/agents/${ agentId }/optimize`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ from: opts.from, to: opts.to, sessionId: opts.sessionId, userContext: opts.userContext || undefined })
+  });
+  if (!r.ok) { const e = await r.json().catch(() => ({ error: r.statusText })); throw e; }
+  return r.json();
+}
+
+export async function getOptimizationRuns(agentId: string): Promise<OptimizationRunSummary[]>
+{
+  const r = await fetch(`${ BASE }/api/admin/agents/${ agentId }/optimize/runs`, { headers: authHeaders() });
+  if (!r.ok) throw await r.json().catch(() => ({ error: r.statusText }));
+  return r.json();
+}
+
+export async function getOptimizationRunsBySession(sessionId: string): Promise<OptimizationRunSummary[]>
+{
+  const r = await fetch(`${ BASE }/api/admin/sessions/${ sessionId }/optimize/runs`, { headers: authHeaders() });
+  if (!r.ok) throw await r.json().catch(() => ({ error: r.statusText }));
+  return r.json();
+}
+
+export async function getOptimizationRunDetail(agentId: string, runId: number): Promise<OptimizationRunDetail>
+{
+  const r = await fetch(`${ BASE }/api/admin/agents/${ agentId }/optimize/runs/${ runId }`, { headers: authHeaders() });
+  if (!r.ok) throw await r.json().catch(() => ({ error: r.statusText }));
+  return r.json();
+}
+
+export async function getOptimizationSuggestions(
+  agentId: string,
+  opts?: { status?: string; type?: string; runId?: number; minConfidence?: number }
+): Promise<OptimizationSuggestion[]>
+{
+  const params = new URLSearchParams();
+  if (opts?.status) params.set("status", opts.status);
+  if (opts?.type) params.set("type", opts.type);
+  if (opts?.runId != null) params.set("runId", String(opts.runId));
+  if (opts?.minConfidence != null && opts.minConfidence > 0) params.set("minConfidence", String(opts.minConfidence));
+  const qs = params.toString();
+  const r = await fetch(`${ BASE }/api/admin/agents/${ agentId }/optimize/suggestions${ qs ? `?${ qs }` : "" }`, { headers: authHeaders() });
+  if (!r.ok) throw await r.json().catch(() => ({ error: r.statusText }));
+  return r.json();
+}
+
+export async function mergePrompt(agentId: string, suggestionIds: number[]): Promise<{ mergedPrompt: string }>
+{
+  const r = await fetch(`${ BASE }/api/admin/agents/${ agentId }/optimize/suggestions/merge-prompt`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ suggestionIds })
+  });
+  if (!r.ok) throw await r.json().catch(() => ({ error: r.statusText }));
+  return r.json();
+}
+
+export async function applyMerged(agentId: string, mergedPrompt: string, suggestionIds: number[]): Promise<void>
+{
+  const r = await fetch(`${ BASE }/api/admin/agents/${ agentId }/optimize/suggestions/apply-merged`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ mergedPrompt, suggestionIds })
+  });
+  if (!r.ok) throw await r.json().catch(() => ({ error: r.statusText }));
+}
+
+export async function reviewSuggestion(
+  agentId: string, id: number, action: "approve" | "reject", notes?: string
+): Promise<void>
+{
+  const r = await fetch(`${ BASE }/api/admin/agents/${ agentId }/optimize/suggestions/${ id }/${ action }`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ notes })
+  });
+  if (!r.ok) throw await r.json().catch(() => ({ error: r.statusText }));
+}
+
+export async function applySuggestion(
+  agentId: string, id: number, applyMode = "append"
+): Promise<void>
+{
+  const r = await fetch(`${ BASE }/api/admin/agents/${ agentId }/optimize/suggestions/${ id }/apply`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ applyMode })
+  });
+  if (!r.ok) throw await r.json().catch(() => ({ error: r.statusText }));
+}
+
+export async function getOptimizationSchedule(agentId: string): Promise<OptimizationScheduleConfig>
+{
+  const r = await fetch(`${ BASE }/api/admin/agents/${ agentId }/optimize/schedule`, { headers: authHeaders() });
+  if (!r.ok) throw await r.json().catch(() => ({ error: r.statusText }));
+  return r.json();
+}
+
+export async function saveOptimizationSchedule(agentId: string, config: OptimizationScheduleConfig): Promise<void>
+{
+  const r = await fetch(`${ BASE }/api/admin/agents/${ agentId }/optimize/schedule`, {
+    method: "PUT",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(config)
+  });
+  if (!r.ok) throw await r.json().catch(() => ({ error: r.statusText }));
+}
+
+export async function getFewShotExamples(agentId: string): Promise<FewShotExample[]>
+{
+  const r = await fetch(`${ BASE }/api/admin/agents/${ agentId }/examples`, { headers: authHeaders() });
+  if (!r.ok) throw await r.json().catch(() => ({ error: r.statusText }));
+  return r.json();
+}
+
+export async function addFewShotExample(agentId: string, example: Partial<FewShotExample>): Promise<{ id: number }>
+{
+  const r = await fetch(`${ BASE }/api/admin/agents/${ agentId }/examples`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify(example)
+  });
+  if (!r.ok) throw await r.json().catch(() => ({ error: r.statusText }));
+  return r.json();
+}
+
+export async function deleteFewShotExample(agentId: string, id: number): Promise<void>
+{
+  const r = await fetch(`${ BASE }/api/admin/agents/${ agentId }/examples/${ id }`, {
+    method: "DELETE", headers: authHeaders()
+  });
+  if (!r.ok) throw await r.json().catch(() => ({ error: r.statusText }));
+}
+
+export async function reorderFewShotExamples(agentId: string, orderedIds: number[]): Promise<void>
+{
+  const r = await fetch(`${ BASE }/api/admin/agents/${ agentId }/examples/reorder`, {
+    method: "PUT",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ orderedIds })
+  });
+  if (!r.ok) throw await r.json().catch(() => ({ error: r.statusText }));
+}
+
+export async function triggerSessionOptimization(
+  sessionId: string
+): Promise<{ runId: number; agentId: string }>
+{
+  const r = await fetch(`${ BASE }/api/admin/sessions/${ sessionId }/optimize`, {
+    method: "POST", headers: authHeaders()
+  });
+  if (!r.ok) throw await r.json().catch(() => ({ error: r.statusText }));
+  return r.json();
+}
+
+export async function markTurnAsExample(
+  sessionId: string, turnNumber: number, description?: string
+): Promise<{ id: number }>
+{
+  const r = await fetch(`${ BASE }/api/admin/sessions/${ sessionId }/turns/${ turnNumber }/examples`, {
+    method: "POST",
+    headers: { ...authHeaders(), "Content-Type": "application/json" },
+    body: JSON.stringify({ description })
+  });
+  if (!r.ok) throw await r.json().catch(() => ({ error: r.statusText }));
+  return r.json();
 }
 

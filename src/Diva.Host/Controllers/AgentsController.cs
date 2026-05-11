@@ -8,6 +8,7 @@ using Diva.Infrastructure.Auth;
 using Diva.Infrastructure.Data;
 using Diva.Infrastructure.Data.Entities;
 using Diva.Infrastructure.LiteLLM;
+using Diva.Infrastructure.Optimization;
 using Diva.TenantAdmin.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -27,6 +28,7 @@ public class AgentsController : ControllerBase
     private readonly IArchetypeRegistry _archetypes;
     private readonly IAgentRegistry _registry;
     private readonly IAgentSetupAssistant _assistant;
+    private readonly IOptimizationLlmAnalyzer _promptImprover;
     private readonly ICredentialResolver? _credentialResolver;
     private readonly ILogger<AgentsController> _logger;
 
@@ -38,6 +40,7 @@ public class AgentsController : ControllerBase
         IArchetypeRegistry archetypes,
         IAgentRegistry registry,
         IAgentSetupAssistant assistant,
+        IOptimizationLlmAnalyzer promptImprover,
         ILogger<AgentsController> logger,
         ICredentialResolver? credentialResolver = null)
     {
@@ -48,6 +51,7 @@ public class AgentsController : ControllerBase
         _archetypes = archetypes;
         _registry = registry;
         _assistant = assistant;
+        _promptImprover = promptImprover;
         _credentialResolver = credentialResolver;
         _logger = logger;
     }
@@ -132,8 +136,9 @@ public class AgentsController : ControllerBase
         existing.Capabilities         = dto.Capabilities;
         existing.ToolBindings         = dto.ToolBindings;
         existing.VerificationMode     = dto.VerificationMode;
-        existing.ContextWindowJson    = dto.ContextWindowJson;
-        existing.CustomVariablesJson  = dto.CustomVariablesJson;
+        existing.ContextWindowJson        = dto.ContextWindowJson;
+        existing.OptimizationOverrideJson = dto.OptimizationOverrideJson;
+        existing.CustomVariablesJson      = dto.CustomVariablesJson;
         existing.MaxContinuations     = dto.MaxContinuations;
         existing.MaxToolResultChars   = dto.MaxToolResultChars;
         existing.MaxOutputTokens      = dto.MaxOutputTokens;
@@ -170,6 +175,33 @@ public class AgentsController : ControllerBase
         db.AgentDefinitions.Remove(existing);
         await db.SaveChangesAsync(ct);
         return NoContent();
+    }
+
+    // ── POST /api/agents/{id}/prompt/improve ──────────────────────────────────
+    [HttpPost("{id}/prompt/improve")]
+    public async Task<IActionResult> ImprovePrompt(
+        string id,
+        [FromBody] ImprovePromptRequest body,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(body.Instruction))
+            return BadRequest(new { error = "Instruction is required." });
+
+        using var db = _db.CreateDbContext(Tenant);
+        var agent = await db.AgentDefinitions.FindAsync([id], ct);
+        if (agent is null) return NotFound();
+
+        try
+        {
+            var improved = await _promptImprover.QuickImprovePromptAsync(
+                agent.SystemPrompt ?? "", body.Instruction, agent, ct);
+            return Ok(new { improvedPrompt = improved });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Quick prompt improve failed for agent {AgentId}", id);
+            return StatusCode(500, new { error = "LLM call failed — check API key and provider configuration." });
+        }
     }
 
     // ── POST /api/agents/{id}/invoke ──────────────────────────────────────────
@@ -581,6 +613,7 @@ public record AgentSummaryDto(string Id, string Name, string DisplayName, string
 public record GroupTemplateSummaryDto(string Id, string Name, string DisplayName, string? Description, string AgentType, int GroupId, string? GroupName, bool IsEnabled, bool IsActivated, string? OverlayGuid);
 public record SetOverlayEnabledDto(bool IsEnabled);
 public record AgentInvokeRequest(string Query, string? SessionId = null, string? ModelId = null, int? LlmConfigId = null, bool ForwardSsoToMcp = false);
+public record ImprovePromptRequest(string Instruction);
 public record McpProbeRequest(string? Endpoint, string? Command, List<string>? Args, bool PassSsoToken = false, string? CredentialRef = null);
 public record McpToolInfo(string Name, string Description);
 public record McpProbeResult(bool Success, List<McpToolInfo> Tools, string? Error);

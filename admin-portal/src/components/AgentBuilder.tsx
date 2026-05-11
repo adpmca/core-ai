@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { AgentAssistantDrawer } from "@/components/AgentAssistantDrawer";
+import { PromptQuickFixDialog } from "@/components/PromptQuickFixDialog";
 import {
   api,
   type AgentArchetype,
@@ -664,6 +665,7 @@ function AdvancedConfigPanel({
   useEffect(() => { if (hasAdvancedConfig || isEditing) setOpen(true); }, [hasAdvancedConfig, isEditing]);
 
   const contextWindow = parseJson<Record<string, number>>(form.contextWindowJson, {});
+  const optimizationOverride = parseJson<Record<string, number>>(form.optimizationOverrideJson, {});
   const customVars = parseJson<Record<string, string>>(form.customVariablesJson, {});
   const toolFilter = parseJson<{ mode?: string; tools?: string[] }>(form.toolFilterJson, {});
 
@@ -672,6 +674,13 @@ function AdvancedConfigPanel({
     if (val === undefined || isNaN(val)) delete next[key];
     else next[key] = val;
     set("contextWindowJson", Object.keys(next).length > 0 ? JSON.stringify(next) : undefined);
+  };
+
+  const setOptimizationOverride = (key: string, val: number | undefined) => {
+    const next = { ...optimizationOverride };
+    if (val === undefined || isNaN(val)) delete next[key];
+    else next[key] = val;
+    set("optimizationOverrideJson", Object.keys(next).length > 0 ? JSON.stringify(next) : undefined);
   };
 
   const setCustomVar = (key: string, val: string) => {
@@ -803,6 +812,31 @@ function AdvancedConfigPanel({
         </div>
 
         <div className="space-y-2">
+          <Label>Optimization Override</Label>
+          <p className="text-xs text-muted-foreground">
+            Override token limits for the LLM calls that power optimization analysis and smart merge.
+            Increase <strong>Merge Token Limit</strong> for agents with very long system prompts.
+          </p>
+          <div className="grid grid-cols-2 gap-3">
+            {[
+              { key: "MergeMaxTokens",    label: "Merge Token Limit",    hint: "Default: 8192" },
+              { key: "AnalyzerMaxTokens", label: "Analyzer Token Limit", hint: "Default: 2048" },
+            ].map(({ key, label, hint }) => (
+              <div key={key} className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">{label}</Label>
+                <Input
+                  type="number"
+                  value={optimizationOverride[key] ?? ""}
+                  onChange={(e) => setOptimizationOverride(key, e.target.value ? parseInt(e.target.value) : undefined)}
+                  placeholder={hint}
+                  className="w-40"
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-2">
           <Label>Custom Variables</Label>
           <div className="space-y-2">
             {Object.entries(customVars).map(([key, val]) => (
@@ -892,7 +926,8 @@ export function AgentBuilder() {
   const [llmConfig, setLlmConfig] = useState<LlmConfig>({ availableModels: [], currentProvider: "", defaultModel: "" });
   const [agentDefaults, setAgentDefaults] = useState<AgentDefaults | null>(null);
   const [availableLlmConfigs, setAvailableLlmConfigs] = useState<AvailableLlmConfig[]>([]);
-  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen]   = useState(false);
+  const [quickFixOpen, setQuickFixOpen]     = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [promptHistory, setPromptHistory] = useState<AgentPromptHistoryEntry[]>([]);
   const [credentials, setCredentials] = useState<McpCredential[]>([]);
@@ -1213,6 +1248,17 @@ export function AgentBuilder() {
                       History
                     </Button>
                   )}
+                  {agentId && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setQuickFixOpen(true)}
+                      className="gap-1.5"
+                    >
+                      <Sparkles className="size-3.5 text-amber-500" />
+                      Quick Fix
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
@@ -1236,6 +1282,16 @@ export function AgentBuilder() {
               />
             </CardContent>
           </Card>
+
+          {agentId && (
+            <PromptQuickFixDialog
+              agentId={agentId}
+              currentPrompt={form.systemPrompt ?? ""}
+              open={quickFixOpen}
+              onOpenChange={setQuickFixOpen}
+              onAccept={(improved) => set("systemPrompt", improved)}
+            />
+          )}
 
           <AgentAssistantDrawer
             open={assistantOpen}

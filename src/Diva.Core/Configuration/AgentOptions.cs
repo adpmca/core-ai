@@ -114,6 +114,7 @@ public sealed class AgentOptions
     public RuleLearningOptions RuleLearning { get; set; } = new();
     public LlmRetryOptions Retry { get; set; } = new();
     public ContextWindowOptions ContextWindow { get; set; } = new();
+    public OptimizationOptions Optimization { get; set; } = new();
 }
 
 public sealed class LlmRetryOptions
@@ -160,6 +161,37 @@ public sealed class ContextWindowOverrideOptions
     public int? KeepLastRawMessages { get; set; }
     public int? MaxHistoryTurns { get; set; }
     public string? SummarizerModel { get; set; }
+}
+
+public sealed class OptimizationOptions
+{
+    public float ConfidenceThreshold { get; set; } = 0.6f;
+    public int MaxSuggestionsPerRun { get; set; } = 5;
+    public int SampleTurnsForLlm { get; set; } = 5;
+    public int MaxTranscriptChars { get; set; } = 8000;
+    /// <summary>Max output tokens for the analysis LLM call that produces suggestions. Default 2048.</summary>
+    public int AnalyzerMaxTokens { get; set; } = 2048;
+    /// <summary>Max output tokens for the prompt merge LLM call. Needs to be large enough to
+    /// reproduce the full merged system prompt. Default 8192. Can be overridden per-agent via
+    /// AgentDefinition.OptimizationOverrideJson → MergeMaxTokens.</summary>
+    public int MergeMaxTokens { get; set; } = 8192;
+    public int ScorerMaxTokens { get; set; } = 256;
+    public bool EnablePerTurnScoring { get; set; } = true;
+    public int SchedulerPollIntervalSeconds { get; set; } = 300;
+    public int MaxFewShotExamplesPerAgent { get; set; } = 5;
+}
+
+/// <summary>
+/// Per-agent optimization overrides stored as JSON in AgentDefinitionEntity.OptimizationOverrideJson.
+/// Null fields fall through to the global OptimizationOptions defaults.
+/// </summary>
+public sealed class OptimizationOverrideOptions
+{
+    /// <summary>Override max output tokens for the merge LLM call. Useful for agents with very
+    /// long system prompts that exceed the global MergeMaxTokens default.</summary>
+    public int? MergeMaxTokens { get; set; }
+    /// <summary>Override max output tokens for the analysis LLM call.</summary>
+    public int? AnalyzerMaxTokens { get; set; }
 }
 
 public sealed class RuleLearningOptions

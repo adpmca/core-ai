@@ -15,7 +15,7 @@ namespace Diva.Infrastructure.Data.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "10.0.5");
+            modelBuilder.HasAnnotation("ProductVersion", "10.0.7");
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.AgentDefinitionEntity", b =>
                 {
@@ -23,16 +23,20 @@ namespace Diva.Infrastructure.Data.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("A2AAuthScheme")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasJsonPropertyName("a2aAuthScheme");
 
                     b.Property<string>("A2AEndpoint")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasJsonPropertyName("a2aEndpoint");
 
                     b.Property<string>("A2ARemoteAgentId")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasJsonPropertyName("a2aRemoteAgentId");
 
                     b.Property<string>("A2ASecretRef")
-                        .HasColumnType("TEXT");
+                        .HasColumnType("TEXT")
+                        .HasJsonPropertyName("a2aSecretRef");
 
                     b.Property<string>("AgentType")
                         .IsRequired()
@@ -102,6 +106,9 @@ namespace Diva.Infrastructure.Data.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("OptimizationOverrideJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("PipelineStagesJson")
                         .HasColumnType("TEXT");
 
@@ -138,7 +145,169 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("AgentDefinitions", (string)null);
+                    b.ToTable("AgentDefinitions");
+                });
+
+            modelBuilder.Entity("Diva.Infrastructure.Data.Entities.AgentOptimizationConfigEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AgentId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("LastScheduledRunAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("NextRunAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RunAtTime")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("RunOnDayOfWeek")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ScheduleType")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TenantId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Timezone")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "AgentId")
+                        .IsUnique();
+
+                    b.ToTable("OptimizationConfigs");
+                });
+
+            modelBuilder.Entity("Diva.Infrastructure.Data.Entities.AgentOptimizationRunEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AgentId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("FromDate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReportJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SessionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("SessionsAnalyzed")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TenantId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("ToDate")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TriggerSource")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TurnsAnalyzed")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "AgentId", "StartedAt");
+
+                    b.ToTable("OptimizationRuns");
+                });
+
+            modelBuilder.Entity("Diva.Infrastructure.Data.Entities.AgentOptimizationSuggestionEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AgentId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<float>("Confidence")
+                        .HasColumnType("REAL");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CurrentValue")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FieldName")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reasoning")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReviewNotes")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ReviewedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReviewedBy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("RunId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SuggestedValue")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TenantId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RunId");
+
+                    b.HasIndex("TenantId", "AgentId", "Status");
+
+                    b.ToTable("OptimizationSuggestions");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.AgentPromptHistoryEntity", b =>
@@ -180,7 +349,7 @@ namespace Diva.Infrastructure.Data.Migrations
                     b.HasIndex("TenantId", "AgentId", "Version")
                         .IsUnique();
 
-                    b.ToTable("AgentPromptHistory", (string)null);
+                    b.ToTable("AgentPromptHistory");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.AgentSessionEntity", b =>
@@ -218,7 +387,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("TenantId", "UserId", "Status");
 
-                    b.ToTable("Sessions", (string)null);
+                    b.ToTable("Sessions");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.AgentSessionMessageEntity", b =>
@@ -249,7 +418,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("SessionId");
 
-                    b.ToTable("SessionMessages", (string)null);
+                    b.ToTable("SessionMessages");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.AgentTaskEntity", b =>
@@ -293,7 +462,56 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("TenantId", "Status");
 
-                    b.ToTable("AgentTasks", (string)null);
+                    b.ToTable("AgentTasks");
+                });
+
+            modelBuilder.Entity("Diva.Infrastructure.Data.Entities.FewShotExampleEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AgentId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AssistantMessage")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("SourceSessionId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("SourceTurnNumber")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TenantId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("UserMessage")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "AgentId", "SortOrder");
+
+                    b.ToTable("FewShotExamples");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.GroupAgentTemplateEntity", b =>
@@ -416,7 +634,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("GroupId", "IsEnabled");
 
-                    b.ToTable("GroupAgentTemplates", (string)null);
+                    b.ToTable("GroupAgentTemplates");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.GroupBusinessRuleEntity", b =>
@@ -491,7 +709,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("GroupId", "AgentType", "IsActive");
 
-                    b.ToTable("GroupBusinessRules", (string)null);
+                    b.ToTable("GroupBusinessRules");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.GroupLlmConfigEntity", b =>
@@ -537,7 +755,7 @@ namespace Diva.Infrastructure.Data.Migrations
                     b.HasIndex("GroupId", "Name")
                         .IsUnique();
 
-                    b.ToTable("GroupLlmConfigs", (string)null);
+                    b.ToTable("GroupLlmConfigs");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.GroupPromptOverrideEntity", b =>
@@ -581,7 +799,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("GroupId", "AgentType", "IsActive");
 
-                    b.ToTable("GroupPromptOverrides", (string)null);
+                    b.ToTable("GroupPromptOverrides");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.GroupScheduledTaskEntity", b =>
@@ -650,7 +868,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("GroupId", "IsEnabled", "NextRunUtc");
 
-                    b.ToTable("GroupScheduledTasks", (string)null);
+                    b.ToTable("GroupScheduledTasks");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.GroupScheduledTaskRunEntity", b =>
@@ -700,7 +918,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("GroupTaskId", "TenantId", "Status");
 
-                    b.ToTable("GroupScheduledTaskRuns", (string)null);
+                    b.ToTable("GroupScheduledTaskRuns");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.HookRuleEntity", b =>
@@ -757,7 +975,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("PackId", "OrderInPack");
 
-                    b.ToTable("HookRules", (string)null);
+                    b.ToTable("HookRules");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.HookRulePackEntity", b =>
@@ -821,7 +1039,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("TenantId", "IsEnabled", "Priority");
 
-                    b.ToTable("RulePacks", (string)null);
+                    b.ToTable("RulePacks");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.LearnedRuleEntity", b =>
@@ -871,7 +1089,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("TenantId", "Status");
 
-                    b.ToTable("LearnedRules", (string)null);
+                    b.ToTable("LearnedRules");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.LocalUserEntity", b =>
@@ -917,7 +1135,7 @@ namespace Diva.Infrastructure.Data.Migrations
                     b.HasIndex("TenantId", "Username")
                         .IsUnique();
 
-                    b.ToTable("LocalUsers", (string)null);
+                    b.ToTable("LocalUsers");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.McpCredentialEntity", b =>
@@ -967,7 +1185,7 @@ namespace Diva.Infrastructure.Data.Migrations
                     b.HasIndex("TenantId", "Name")
                         .IsUnique();
 
-                    b.ToTable("McpCredentials", (string)null);
+                    b.ToTable("McpCredentials");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.PlatformApiKeyEntity", b =>
@@ -1017,7 +1235,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("KeyHash");
 
-                    b.ToTable("PlatformApiKeys", (string)null);
+                    b.ToTable("PlatformApiKeys");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.PlatformLlmConfigEntity", b =>
@@ -1059,7 +1277,7 @@ namespace Diva.Infrastructure.Data.Migrations
                     b.HasIndex("Name")
                         .IsUnique();
 
-                    b.ToTable("PlatformLlmConfigs", (string)null);
+                    b.ToTable("PlatformLlmConfigs");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.RuleExecutionLogEntity", b =>
@@ -1102,7 +1320,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("PackId", "RuleId", "Timestamp");
 
-                    b.ToTable("RuleExecutionLogs", (string)null);
+                    b.ToTable("RuleExecutionLogs");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.RulePackHistoryEntity", b =>
@@ -1143,7 +1361,7 @@ namespace Diva.Infrastructure.Data.Migrations
                     b.HasIndex("TenantId", "PackId", "Version")
                         .IsUnique();
 
-                    b.ToTable("RulePackHistory", (string)null);
+                    b.ToTable("RulePackHistory");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.ScheduledTaskEntity", b =>
@@ -1212,7 +1430,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("TenantId", "IsEnabled", "NextRunUtc");
 
-                    b.ToTable("ScheduledTasks", (string)null);
+                    b.ToTable("ScheduledTasks");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.ScheduledTaskRunEntity", b =>
@@ -1264,7 +1482,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("TenantId", "CreatedAt");
 
-                    b.ToTable("ScheduledTaskRuns", (string)null);
+                    b.ToTable("ScheduledTaskRuns");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.SiteEntity", b =>
@@ -1290,7 +1508,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("TenantId");
 
-                    b.ToTable("Sites", (string)null);
+                    b.ToTable("Sites");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.TenantBusinessRuleEntity", b =>
@@ -1384,7 +1602,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("TenantId", "AgentType", "IsActive");
 
-                    b.ToTable("BusinessRules", (string)null);
+                    b.ToTable("BusinessRules");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.TenantEntity", b =>
@@ -1411,7 +1629,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Tenants", (string)null);
+                    b.ToTable("Tenants");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.TenantGroupAgentOverlayEntity", b =>
@@ -1476,7 +1694,7 @@ namespace Diva.Infrastructure.Data.Migrations
                     b.HasIndex("TenantId", "GroupTemplateId")
                         .IsUnique();
 
-                    b.ToTable("GroupAgentOverlays", (string)null);
+                    b.ToTable("GroupAgentOverlays");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.TenantGroupEntity", b =>
@@ -1500,7 +1718,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("TenantGroups", (string)null);
+                    b.ToTable("TenantGroups");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.TenantGroupMemberEntity", b =>
@@ -1525,7 +1743,7 @@ namespace Diva.Infrastructure.Data.Migrations
                     b.HasIndex("GroupId", "TenantId")
                         .IsUnique();
 
-                    b.ToTable("TenantGroupMembers", (string)null);
+                    b.ToTable("TenantGroupMembers");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.TenantLlmConfigEntity", b =>
@@ -1567,7 +1785,7 @@ namespace Diva.Infrastructure.Data.Migrations
                         .IsUnique()
                         .HasFilter("[Name] IS NOT NULL");
 
-                    b.ToTable("TenantLlmConfigs", (string)null);
+                    b.ToTable("TenantLlmConfigs");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.TenantPromptOverrideEntity", b =>
@@ -1612,7 +1830,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("PromptOverrides", (string)null);
+                    b.ToTable("PromptOverrides");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.TenantSsoConfigEntity", b =>
@@ -1698,7 +1916,7 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("TenantId", "Issuer");
 
-                    b.ToTable("SsoConfigs", (string)null);
+                    b.ToTable("SsoConfigs");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.UserProfileEntity", b =>
@@ -1758,7 +1976,7 @@ namespace Diva.Infrastructure.Data.Migrations
                     b.HasIndex("TenantId", "UserId")
                         .IsUnique();
 
-                    b.ToTable("UserProfiles", (string)null);
+                    b.ToTable("UserProfiles");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.WidgetConfigEntity", b =>
@@ -1814,7 +2032,18 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.HasIndex("TenantId", "IsActive");
 
-                    b.ToTable("WidgetConfigs", (string)null);
+                    b.ToTable("WidgetConfigs");
+                });
+
+            modelBuilder.Entity("Diva.Infrastructure.Data.Entities.AgentOptimizationSuggestionEntity", b =>
+                {
+                    b.HasOne("Diva.Infrastructure.Data.Entities.AgentOptimizationRunEntity", "Run")
+                        .WithMany("Suggestions")
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Run");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.AgentSessionMessageEntity", b =>
@@ -1996,6 +2225,11 @@ namespace Diva.Infrastructure.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Group");
+                });
+
+            modelBuilder.Entity("Diva.Infrastructure.Data.Entities.AgentOptimizationRunEntity", b =>
+                {
+                    b.Navigation("Suggestions");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.AgentSessionEntity", b =>

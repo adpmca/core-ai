@@ -1,9 +1,13 @@
+using System.Text;
+using Diva.Core.Configuration;
 using Diva.Core.Models;
 using Diva.Core.Prompts;
 using Diva.Infrastructure.Data.Entities;
 using Diva.Infrastructure.Learning;
+using Diva.Infrastructure.Optimization;
 using Diva.TenantAdmin.Services;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Diva.TenantAdmin.Prompts;
 
@@ -24,17 +28,23 @@ public sealed class TenantAwarePromptBuilder : IPromptBuilder
     private readonly ITenantBusinessRulesService _rules;
     private readonly ISessionRuleManager _sessionRules;
     private readonly ITenantGroupService _groupService;
+    private readonly IAgentOptimizationService _optimization;
+    private readonly AgentOptions _opts;
     private readonly ILogger<TenantAwarePromptBuilder> _logger;
 
     public TenantAwarePromptBuilder(
         ITenantBusinessRulesService rules,
         ISessionRuleManager sessionRules,
         ITenantGroupService groupService,
+        IAgentOptimizationService optimization,
+        IOptions<AgentOptions> opts,
         ILogger<TenantAwarePromptBuilder> logger)
     {
         _rules        = rules;
         _sessionRules = sessionRules;
         _groupService = groupService;
+        _optimization = optimization;
+        _opts         = opts.Value;
         _logger       = logger;
     }
 
@@ -89,6 +99,33 @@ public sealed class TenantAwarePromptBuilder : IPromptBuilder
             var sessionBlock = "## Session Rules\n\n" +
                 string.Join("\n", sessionRuleList.Select(r => $"- {r.PromptInjection}"));
             parts.Add(sessionBlock);
+        }
+
+        // 5. ## Response Examples (few-shot, Phase 24) — only when agentId is known
+        if (agentId is not null)
+        {
+            try
+            {
+                var examples = await _optimization.GetFewShotExamplesAsync(agentId, tenant.TenantId, ct);
+                var enabled  = examples.Where(e => e.IsEnabled).OrderBy(e => e.SortOrder)
+                                       .Take(_opts.Optimization.MaxFewShotExamplesPerAgent)
+                                       .ToList();
+                if (enabled.Count > 0)
+                {
+                    var sb = new StringBuilder("## Response Examples\n");
+                    foreach (var ex in enabled)
+                    {
+                        sb.AppendLine($"User: {ex.UserMessage}");
+                        sb.AppendLine($"Assistant: {ex.AssistantMessage}");
+                        sb.AppendLine();
+                    }
+                    parts.Add(sb.ToString().TrimEnd());
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to load few-shot examples for agent {AgentId}", agentId);
+            }
         }
 
         var result = string.Join("\n\n", parts);
@@ -149,12 +186,42 @@ public sealed class TenantAwarePromptBuilder : IPromptBuilder
 
         // ── Dynamic part (changes per session) ────────────────────────────────────────────
         var sessionRuleList = sessionRulesTask.Result;
-        var dynamicResult   = sessionRuleList.Count > 0
-            ? PromptVariableResolver.Resolve(
+        var dynamicParts    = new List<string>();
+
+        if (sessionRuleList.Count > 0)
+            dynamicParts.Add(PromptVariableResolver.Resolve(
                 "## Session Rules\n\n" +
                 string.Join("\n", sessionRuleList.Select(r => $"- {r.PromptInjection}")),
-                customVars, runtimeVars, _logger)
-            : string.Empty;
+                customVars, runtimeVars, _logger));
+
+        // Few-shot examples (Phase 24) — injected in dynamic part (per-agent, not per-session)
+        if (agentId is not null)
+        {
+            try
+            {
+                var examples = await _optimization.GetFewShotExamplesAsync(agentId, tenant.TenantId, ct);
+                var enabled  = examples.Where(e => e.IsEnabled).OrderBy(e => e.SortOrder)
+                                       .Take(_opts.Optimization.MaxFewShotExamplesPerAgent)
+                                       .ToList();
+                if (enabled.Count > 0)
+                {
+                    var sb = new StringBuilder("## Response Examples\n");
+                    foreach (var ex in enabled)
+                    {
+                        sb.AppendLine($"User: {ex.UserMessage}");
+                        sb.AppendLine($"Assistant: {ex.AssistantMessage}");
+                        sb.AppendLine();
+                    }
+                    dynamicParts.Add(sb.ToString().TrimEnd());
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to load few-shot examples for agent {AgentId}", agentId);
+            }
+        }
+
+        var dynamicResult = dynamicParts.Count > 0 ? string.Join("\n\n", dynamicParts) : string.Empty;
 
         _logger.LogDebug(
             "BuildPartsAsync for agentType={AgentType} agentId={AgentId} tenant={TenantId}: " +

@@ -20,6 +20,7 @@ public class AgentDefinitionEntity : ITenantEntity
     public string? ToolBindings { get; set; }              // JSON array of tool names
     public string? VerificationMode { get; set; }          // null = use global default; Off|ToolGrounded|LlmVerifier|Strict|Auto
     public string? ContextWindowJson { get; set; }         // null = use global defaults; JSON ContextWindowOverrideOptions e.g. {"MaxHistoryTurns":5}
+    public string? OptimizationOverrideJson { get; set; } // null = use global defaults; JSON OptimizationOverrideOptions e.g. {"MergeMaxTokens":16384}
     public string? CustomVariablesJson { get; set; }       // null = no custom variables; JSON Dictionary<string,string> e.g. {"company_name":"Acme Corp"}
     public int? MaxContinuations { get; set; }              // null = use global AgentOptions.MaxContinuations
     public int? MaxToolResultChars { get; set; }            // null = use global AgentOptions.MaxToolResultChars

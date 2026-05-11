@@ -8,6 +8,8 @@ using Diva.Tools.Core;
 using Diva.Tools.FileSystem.Abstractions;
 using Diva.Tools.FileSystem.Models;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.FileSystemGlobbing;
+using Microsoft.Extensions.FileSystemGlobbing.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Server;
@@ -295,21 +297,13 @@ public sealed class FileSystemMcpTools(
             var canonical = guard.Validate(basePath);
             if (!Directory.Exists(canonical)) return IoError($"Directory not found: {canonical}");
 
-            // Strip glob prefix (**/  or **\) — Directory.EnumerateFiles handles recursion itself
-            // and throws on ** in the pattern. e.g. **/*.json → *.json
-            var filePattern = pattern;
-            if (filePattern.StartsWith("**/") || filePattern.StartsWith("**\\"))
-                filePattern = filePattern[3..];
-            else if (filePattern == "**" || filePattern == "**/*" || filePattern == "**\\*")
-                filePattern = "*";
+            var matcher = new Matcher(StringComparison.OrdinalIgnoreCase);
+            matcher.AddInclude(pattern);
 
-            var results = Directory.EnumerateFiles(canonical, filePattern,
-                    new EnumerationOptions
-                    {
-                        RecurseSubdirectories = true,
-                        IgnoreInaccessible = true,
-                        MatchCasing = MatchCasing.CaseInsensitive
-                    })
+            var matchResult = matcher.Execute(new DirectoryInfoWrapper(new DirectoryInfo(canonical)));
+
+            var results = matchResult.Files
+                .Select(f => Path.GetFullPath(Path.Combine(canonical, f.Path)))
                 .Take(_opts.MaxSearchResults)
                 .ToList();
 
@@ -578,8 +572,13 @@ public sealed class FileSystemMcpTools(
     }
 
     [McpServerTool(Name = "run_script")]
-    [Description("Execute a bash script and return stdout, stderr, and exit code. Write scripts using bash syntax — works on Linux, macOS, and Windows (Git Bash / WSL). Requires AllowScript=true in config.")]
-    public string RunScript([Description("Bash script to execute")] string script)
+    [Description("Execute a script and return stdout, stderr, and exit code. Requires AllowScript=true. " +
+                 "language=\"bash\" (default): executes via bash — use bash syntax (echo, cp, find, zip, etc.). " +
+                 "language=\"powershell\": executes via powershell.exe / pwsh — $variable syntax is preserved. " +
+                 "Always pass the language parameter explicitly to avoid variable expansion surprises.")]
+    public string RunScript(
+        [Description("Script content")] string script,
+        [Description("\"bash\" or \"powershell\" (default: \"bash\")")] string language = "bash")
     {
         if (!filter.IsEnabled("run_script")) return DisabledError("run_script");
         if (!_opts.AllowScript) return ScriptDisabledError();
@@ -587,11 +586,14 @@ public sealed class FileSystemMcpTools(
         var t = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         try
         {
+            using var _ = scriptThrottle.Acquire(5000);
+
+            if (language.Equals("powershell", StringComparison.OrdinalIgnoreCase))
+                return RunPowerShellScript(script, ctx, t);
+
             var bash = ResolveBash();
             if (bash is null)
                 return IoError("bash not found. Install Git Bash (Windows) or ensure bash is on PATH.");
-
-            using var _ = scriptThrottle.Acquire(5000);
 
             var psi = new ProcessStartInfo
             {
@@ -625,6 +627,57 @@ public sealed class FileSystemMcpTools(
         }
         catch (UnauthorizedAccessException ex) { logger.LogWarning("run_script access denied: {Msg}", ex.Message); return AccessError(ex.Message); }
         catch (Exception ex)                   { logger.LogWarning("run_script error: {Msg}", ex.Message); return IoError(ex.Message); }
+    }
+
+    private string RunPowerShellScript(string script, McpServerContext ctx, long t)
+    {
+        var ps = ResolvePowerShell();
+        if (ps is null)
+            return IoError("powershell.exe / pwsh not found on this system.");
+
+        var tmp = Path.Combine(Path.GetTempPath(), $"diva-script-{Guid.NewGuid():N}.ps1");
+        try
+        {
+            File.WriteAllText(tmp, script);
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = ps,
+                Arguments = $"-NonInteractive -File \"{tmp}\"",
+                RedirectStandardOutput = true,
+                RedirectStandardError  = true,
+                UseShellExecute  = false,
+                CreateNoWindow   = true
+            };
+
+            using var process = Process.Start(psi)
+                ?? throw new InvalidOperationException($"Failed to start PowerShell at '{ps}'.");
+
+            var stdout = process.StandardOutput.ReadToEndAsync();
+            var stderr = process.StandardError.ReadToEndAsync();
+
+            if (!process.WaitForExit(_opts.ScriptTimeoutSeconds * 1000))
+            {
+                process.Kill(entireProcessTree: true);
+                return IoError($"Script timed out after {_opts.ScriptTimeoutSeconds}s.");
+            }
+
+            LogDebug("run_script", ctx, t);
+            return JsonSerializer.Serialize(
+                new { exitCode = process.ExitCode, stdout = stdout.Result, stderr = stderr.Result }, _json);
+        }
+        finally
+        {
+            try { File.Delete(tmp); } catch { /* best effort */ }
+        }
+    }
+
+    private static string? ResolvePowerShell()
+    {
+        if (IsOnPath("pwsh")) return "pwsh";
+        if (IsOnPath("powershell")) return "powershell";
+        const string winPs = @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe";
+        return File.Exists(winPs) ? winPs : null;
     }
 
     private static string? ResolveBash()

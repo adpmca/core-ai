@@ -271,6 +271,7 @@ public class AgentSetupAssistantTests : IDisposable
             StubArchetypes(),
             new PromptTemplateStore(Path.GetTempPath(), NullLogger<PromptTemplateStore>.Instance),
             DbFactory(),
+            Substitute.For<Diva.Infrastructure.LiteLLM.ILlmConfigResolver>(),
             NullLogger<AgentSetupAssistant>.Instance);
 
         await assistant.SavePromptVersionAsync(
@@ -294,6 +295,7 @@ public class AgentSetupAssistantTests : IDisposable
             StubArchetypes(),
             new PromptTemplateStore(Path.GetTempPath(), NullLogger<PromptTemplateStore>.Instance),
             DbFactory(),
+            Substitute.For<Diva.Infrastructure.LiteLLM.ILlmConfigResolver>(),
             NullLogger<AgentSetupAssistant>.Instance);
 
         await assistant.SavePromptVersionAsync("agent-002", 1, "v1", "manual", null, "admin", CancellationToken.None);
@@ -318,6 +320,7 @@ public class AgentSetupAssistantTests : IDisposable
             StubArchetypes(),
             new PromptTemplateStore(Path.GetTempPath(), NullLogger<PromptTemplateStore>.Instance),
             DbFactory(),
+            Substitute.For<Diva.Infrastructure.LiteLLM.ILlmConfigResolver>(),
             NullLogger<AgentSetupAssistant>.Instance);
 
         await assistant.SavePromptVersionAsync("agent-003", 1, "original", "manual", null, "admin", CancellationToken.None);
@@ -342,6 +345,7 @@ public class AgentSetupAssistantTests : IDisposable
             StubArchetypes(),
             new PromptTemplateStore(Path.GetTempPath(), NullLogger<PromptTemplateStore>.Instance),
             DbFactory(),
+            Substitute.For<Diva.Infrastructure.LiteLLM.ILlmConfigResolver>(),
             NullLogger<AgentSetupAssistant>.Instance);
 
         var history = await assistant.GetAgentPromptHistoryAsync("unknown-agent", 99, CancellationToken.None);
@@ -358,6 +362,7 @@ public class AgentSetupAssistantTests : IDisposable
             StubArchetypes(),
             new PromptTemplateStore(Path.GetTempPath(), NullLogger<PromptTemplateStore>.Instance),
             DbFactory(),
+            Substitute.For<Diva.Infrastructure.LiteLLM.ILlmConfigResolver>(),
             NullLogger<AgentSetupAssistant>.Instance);
 
         await assistant.SaveRulePackVersionAsync(10, 1, "[]", "manual", null, "admin", CancellationToken.None);

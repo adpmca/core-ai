@@ -60,7 +60,19 @@
       "Bash(curl -s http://localhost:8010/api/auth/setup)",
       "Bash(curl -s http://localhost:8010/api/auth/providers)",
       "Bash(curl -s http://localhost:8010/api/agents -o /dev/null -w \"%{http_code}\")",
-      "Bash(curl -s http://localhost:8010/api/admin/tenants -o /dev/null -w \"%{http_code}\")"
+      "Bash(curl -s http://localhost:8010/api/admin/tenants -o /dev/null -w \"%{http_code}\")",
+      "Bash(curl -s http://localhost:6032/health/live)",
+      "Bash(curl -s -o /dev/null -w \"Unauth API call: HTTP %{http_code}\" http://localhost:6032/api/agents)",
+      "Bash(curl -s http://localhost:6032/api/auth/setup)",
+      "Bash(curl -s -X POST http://localhost:6032/api/auth/setup -H \"Content-Type: application/json\" -d '{\"username\":\"admin\",\"email\":\"admin@local.dev\",\"password\":\"Admin1234!\",\"displayName\":\"Platform Admin\"}')",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8811/health/live)",
+      "Bash(taskkill /F /PID 12380)",
+      "Bash(taskkill /F /PID 37646)",
+      "Bash(taskkill /F /IM \"diva-fs-mcp.exe\")",
+      "Bash(taskkill /F /PID 37672)",
+      "PowerShell(Stop-Process -Id 12380 -Force -ErrorAction SilentlyContinue)",
+      "PowerShell(Stop-Process -Id 37672 -Force -ErrorAction SilentlyContinue)",
+      "PowerShell(Stop-Process -Name \"diva-fs-mcp\" -Force -ErrorAction SilentlyContinue)"
     ]
   }
 }

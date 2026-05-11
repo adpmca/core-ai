@@ -4,6 +4,68 @@
 
 ---
 
+## [2026-05-10] Phase 24 Addendum — Quick Prompt Fix, Per-Agent Optimization Overrides, LLM Merge Improvements
+
+### Quick Prompt Fix (`POST /api/agents/{id}/prompt/improve`)
+
+Admin-facing AI assistant that applies a free-text instruction to the current system prompt and returns
+a revised version for review before saving. Reuses the optimization LLM pipeline and the same token
+budget as Smart Merge (`MergeMaxTokens`).
+
+| File | Change |
+|------|--------|
+| `src/Diva.Infrastructure/Optimization/IOptimizationLlmAnalyzer.cs` | Added `QuickImprovePromptAsync(currentPrompt, instruction, agentDef, ct)` to interface |
+| `src/Diva.Infrastructure/Optimization/OptimizationLlmAnalyzer.cs` | Implemented `QuickImprovePromptAsync`; added `QuickImproveSystemMessage` constant; added `BuildQuickImprovePrompt` (injection-safe delimited framing); added `ResolveMergeMaxTokens(agentDef)` for per-agent token budget override |
+| `src/Diva.Host/Controllers/AgentsController.cs` | Added `POST /api/agents/{id}/prompt/improve` endpoint (`ImprovePromptRequest` record); injects `IOptimizationLlmAnalyzer` |
+| `admin-portal/src/components/PromptQuickFixDialog.tsx` | **New file** — fullscreen two-column dialog: instruction textarea + current prompt reference (left) | AI-revised prompt (editable before accept, right); phase machine (`input → loading → preview`); ⌘↵/Ctrl+↵ shortcut; char-count diff display; real backend error surfacing |
+| `admin-portal/src/components/AgentBuilder.tsx` | Added "Quick Fix" amber-Sparkles button in System Prompt card header (only when agent exists); wires `onAccept` to `set("systemPrompt", improved)` |
+| `admin-portal/src/api.ts` | Added `improvePrompt(id, instruction)` → `POST /api/agents/{id}/prompt/improve` |
+
+### Per-Agent Optimization Token Override
+
+New `OptimizationOverrideOptions` JSON blob on `AgentDefinitionEntity` allows per-agent override of
+`MergeMaxTokens` (covers both Smart Merge and Quick Prompt Fix) and `AnalyzerMaxTokens`.
+
+| File | Change |
+|------|--------|
+| `src/Diva.Core/Configuration/AgentOptions.cs` | Added `MergeMaxTokens = 8192` to `OptimizationOptions`; added `OptimizationOverrideOptions { MergeMaxTokens?, AnalyzerMaxTokens? }` |
+| `src/Diva.Infrastructure/Data/Entities/AgentDefinitionEntity.cs` | Added `OptimizationOverrideJson` nullable string column |
+| `src/Diva.Infrastructure/Data/Migrations/20260510150000_AddOptimizationOverrideJson.cs` | EF migration — `AddColumn<string>("OptimizationOverrideJson", "AgentDefinitions", nullable: true)` |
+| `src/Diva.Infrastructure/Data/Migrations/20260510150000_AddOptimizationOverrideJson.Designer.cs` | Migration Designer.cs snapshot |
+| `src/Diva.Infrastructure/Data/Migrations/DivaDbContextModelSnapshot.cs` | Added `OptimizationOverrideJson` property to `AgentDefinitionEntity` block |
+| `src/Diva.Host/appsettings.json` | Added `Agent.Optimization.MergeMaxTokens: 8192` |
+| `src/Diva.Host/Controllers/AgentsController.cs` | Reads/writes `OptimizationOverrideJson` in agent save and load paths |
+| `admin-portal/src/api.ts` | Added `optimizationOverrideJson?` to `AgentDefinition` interface |
+| `admin-portal/src/components/AgentBuilder.tsx` | Added "Optimization Override" section in Advanced Config — Merge Token Limit + Analyzer Token Limit inputs |
+
+### Optimization Suggestions — Two-Tab Redesign + LLM Merge Apply Path
+
+| File | Change |
+|------|--------|
+| `admin-portal/src/components/AgentOptimizationSuggestions.tsx` | **New file** — replaces flat table with two independent tabs: "System Prompt" (LLM merge via `mergePrompt` → preview → `applyMerged`) and "Agent Configuration" (bulk `applySuggestion`); per-tab checkbox selection; single-row Apply routes through the correct path per type; filter bar (status / run / confidence) shared across tabs |
+| `src/Diva.Infrastructure/Optimization/OptimizationApplicator.cs` | `ApplyPromptAsync` now uses `IOptimizationLlmAnalyzer.MergePromptAsync` with append fallback on LLM error; `IOptimizationLlmAnalyzer` injected in constructor |
+| `tests/Diva.Agents.Tests/Optimization/OptimizationApplicatorTests.cs` | Added `IOptimizationLlmAnalyzer` mock with default merge simulation; updated prompt assertions; added `LlmMergeFails_FallsBackToAppend` test |
+
+### Optimizer Session Mode — UX + Bug Fixes
+
+| File | Change |
+|------|--------|
+| `admin-portal/src/components/AgentOptimizer.tsx` | **New file** — fixed `?sessionId=` URL navigation (uses `getOptimizationRunsBySession` to avoid agentId mismatch); replaced subtle banner with full `SessionAnalysisPanel` card (loading / no-prior-run with inline trigger / in-progress / completed / failed states); hid generic "Run Analysis" card in session mode; fixed in-progress banner for aggregate mode only |
+| `admin-portal/src/components/AgentOptimizer.tsx` | Fixed `QualityBar` null crash (`null.toFixed()`) — JSON `null` from API passed `!== undefined` guard; changed type to `number \| null \| undefined`, normalized with `v = value ?? null`, guards now use `!= null` |
+| `admin-portal/src/components/AgentOptimizer.tsx` | Fixed `verificationFailureRate` and `toolErrorRate` with `?? 0` fallback |
+
+### LLM Timeout Fix
+
+`CallAnthropicAsync` and `CallOpenAiCompatibleAsync` in `OptimizationLlmAnalyzer` previously used the
+SDK default network timeout (100 s), causing timeouts when generating long system prompts. Both now
+use `LlmOptions.HttpTimeoutSeconds` (600 s).
+
+| File | Change |
+|------|--------|
+| `src/Diva.Infrastructure/Optimization/OptimizationLlmAnalyzer.cs` | `CallAnthropicAsync` — passes `HttpClient { Timeout = HttpTimeoutSeconds }` to `AnthropicClient`; `CallOpenAiCompatibleAsync` — sets `OpenAIClientOptions.NetworkTimeout = HttpTimeoutSeconds` |
+
+---
+
 ## [2026-05-06] Scheduled Tasks — Clone, Export, and Import
 
 Full-stack feature across both tenant-scoped and group-scoped scheduled tasks.

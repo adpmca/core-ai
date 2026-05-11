@@ -6,7 +6,7 @@
 
 ## Current Platform State (as of 2026-05-06)
 
-All implementation phases complete except Coordinator Sub-Agent Routing (Phase 19) and domain MCP tool servers (Phase 5 partial). The primary execution engine is `AnthropicAgentRunner` — the planned `LlmClientFactory`/`LiteLLMClient` were superseded by the strategy pattern.
+All implementation phases complete. Phase 5 (domain MCP tool servers) is partially deferred pending real data backends. Phase 19 foundation is complete — remaining work (`OrchestratorAgent`, `ScopedAgentRegistry`, `SubAgentIdsJson`) is an **optional enhancement** for advanced parallel-dispatch scenarios; most coordinator use cases are already served by Phase 14 Agents-as-Tools (`DelegateAgentIdsJson`). The primary execution engine is `AnthropicAgentRunner` — the planned `LlmClientFactory`/`LiteLLMClient` were superseded by the strategy pattern.
 
 **What's live in `AnthropicAgentRunner`:**
 - Single unified `ExecuteReActLoopAsync` shared by all providers via `ILlmProviderStrategy`

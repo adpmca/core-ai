@@ -29,6 +29,9 @@ import { A2ASettings } from "@/components/A2ASettings";
 import { WidgetManager } from "@/components/WidgetManager";
 import SessionBrowser from "@/components/SessionBrowser";
 import SessionDetail from "@/components/SessionDetail";
+import AgentOptimizer from "@/components/AgentOptimizer";
+import AgentOptimizationSuggestions from "@/components/AgentOptimizationSuggestions";
+import AgentFewShotExamples from "@/components/AgentFewShotExamples";
 import { AUTH_ENABLED, auth } from "@/lib/auth";
 
 /** Redirects to /login when auth is enabled and no token is stored. */
@@ -68,6 +71,9 @@ export default function App() {
           <Route path="agents/:id/edit" element={<AgentBuilder />} />
           <Route path="agents/group/:templateId/overlay" element={<GroupAgentOverlayEditor />} />
           <Route path="agents/:id/chat" element={<AgentChat />} />
+          <Route path="agents/:id/optimize" element={<AgentOptimizer />} />
+          <Route path="agents/:id/optimize/suggestions" element={<AgentOptimizationSuggestions />} />
+          <Route path="agents/:id/examples" element={<AgentFewShotExamples />} />
           <Route path="rules/learned" element={<PendingRules />} />
           <Route path="rules/business" element={<BusinessRules />} />
           <Route path="rules/business/new" element={<BusinessRuleEditor />} />

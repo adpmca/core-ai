@@ -228,6 +228,115 @@ public sealed class FileSystemMcpToolsTests : IDisposable
         AssertIsError(result, "ToolDisabled");
     }
 
+    // ── search_files (glob) ───────────────────────────────────────────────
+
+    [Fact]
+    public void SearchFiles_GlobStarStar_RecursesIntoSubdirs()
+    {
+        var sub = Path.Combine(_tempDir, "sub");
+        Directory.CreateDirectory(sub);
+        File.WriteAllText(Path.Combine(sub, "a.log"), "x");
+        File.WriteAllText(Path.Combine(_tempDir, "b.txt"), "x");
+
+        var result = _tools.SearchFiles(_tempDir, "**/*.log");
+
+        var files = JsonSerializer.Deserialize<List<string>>(result);
+        Assert.NotNull(files);
+        Assert.Single(files);
+        Assert.EndsWith("a.log", files[0]);
+    }
+
+    [Fact]
+    public void SearchFiles_NestedGlobPattern_FindsCorrectFiles()
+    {
+        var sub = Path.Combine(_tempDir, "docs", "reports");
+        Directory.CreateDirectory(sub);
+        File.WriteAllText(Path.Combine(sub, "report.pdf"), "x");
+        File.WriteAllText(Path.Combine(_tempDir, "root.pdf"), "x");
+
+        var result = _tools.SearchFiles(_tempDir, "docs/**/*.pdf");
+
+        var files = JsonSerializer.Deserialize<List<string>>(result);
+        Assert.NotNull(files);
+        Assert.Single(files);
+        Assert.EndsWith("report.pdf", files[0]);
+    }
+
+    [Fact]
+    public void SearchFiles_PrefixPattern_DoesNotMatchSimilarPrefix()
+    {
+        File.WriteAllText(Path.Combine(_tempDir, "MCA_report.pdf"), "x");
+        File.WriteAllText(Path.Combine(_tempDir, "BCA_report.pdf"), "x");
+
+        var result = _tools.SearchFiles(_tempDir, "**/MCA*.pdf");
+
+        var files = JsonSerializer.Deserialize<List<string>>(result);
+        Assert.NotNull(files);
+        Assert.Single(files);
+        Assert.EndsWith("MCA_report.pdf", files[0]);
+    }
+
+    // ── run_script ────────────────────────────────────────────────────────
+
+    [Fact]
+    public void RunScript_Disabled_ReturnsError()
+    {
+        var opts = new FileSystemOptions
+        {
+            AllowedBasePaths = [_tempDir],
+            AllowScript = false
+        };
+        var (tools, _) = McpToolsTestFixtures.BuildOverTempDir(opts);
+
+        var result = tools.RunScript("echo hello");
+
+        AssertIsError(result, "ScriptDisabled");
+    }
+
+    [Fact]
+    public void RunScript_Bash_EchoHello_ReturnsStdout()
+    {
+        if (!BashAvailable()) return;
+
+        var opts = new FileSystemOptions { AllowedBasePaths = [_tempDir], AllowScript = true };
+        var (tools, _) = McpToolsTestFixtures.BuildOverTempDir(opts);
+
+        var result = tools.RunScript("echo hello", "bash");
+
+        var doc = JsonDocument.Parse(result).RootElement;
+        Assert.Equal(0, doc.GetProperty("exitCode").GetInt32());
+        Assert.Contains("hello", doc.GetProperty("stdout").GetString() ?? "");
+    }
+
+    [Fact]
+    public void RunScript_PowerShell_VariablesPreserved()
+    {
+        if (!PowerShellAvailable()) return;
+
+        var opts = new FileSystemOptions { AllowedBasePaths = [_tempDir], AllowScript = true };
+        var (tools, _) = McpToolsTestFixtures.BuildOverTempDir(opts);
+
+        var result = tools.RunScript("$x = 'hello'; Write-Output $x", "powershell");
+
+        var doc = JsonDocument.Parse(result).RootElement;
+        Assert.Equal(0, doc.GetProperty("exitCode").GetInt32());
+        Assert.Contains("hello", doc.GetProperty("stdout").GetString() ?? "");
+    }
+
+    [Fact]
+    public void RunScript_PowerShell_ExitCode_Propagated()
+    {
+        if (!PowerShellAvailable()) return;
+
+        var opts = new FileSystemOptions { AllowedBasePaths = [_tempDir], AllowScript = true };
+        var (tools, _) = McpToolsTestFixtures.BuildOverTempDir(opts);
+
+        var result = tools.RunScript("exit 42", "powershell");
+
+        var doc = JsonDocument.Parse(result).RootElement;
+        Assert.Equal(42, doc.GetProperty("exitCode").GetInt32());
+    }
+
     // ── get_allowed_roots ──────────────────────────────────────────────────
 
     [Fact]
@@ -240,7 +349,43 @@ public sealed class FileSystemMcpToolsTests : IDisposable
         Assert.NotEmpty(roots);
     }
 
-    // ── helper ─────────────────────────────────────────────────────────────
+    // ── helpers ────────────────────────────────────────────────────────────
+
+    private static bool BashAvailable()
+    {
+        try
+        {
+            using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "bash", Arguments = "--version",
+                RedirectStandardOutput = true, RedirectStandardError = true,
+                UseShellExecute = false, CreateNoWindow = true
+            });
+            p?.WaitForExit(2000);
+            return p?.ExitCode == 0;
+        }
+        catch { return false; }
+    }
+
+    private static bool PowerShellAvailable()
+    {
+        foreach (var exe in new[] { "pwsh", "powershell" })
+        {
+            try
+            {
+                using var p = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = exe, Arguments = "-Command exit 0",
+                    RedirectStandardOutput = true, RedirectStandardError = true,
+                    UseShellExecute = false, CreateNoWindow = true
+                });
+                p?.WaitForExit(3000);
+                if (p?.ExitCode == 0) return true;
+            }
+            catch { /* try next */ }
+        }
+        return false;
+    }
 
     private static void AssertIsError(string json, string expectedErrorCode)
     {

@@ -16,9 +16,10 @@ services:
       # SessionTrace: persisted to the same /data volume so it survives container restarts
       ConnectionStrings__SessionTrace: "Data Source=/data/sessions-trace.db"
       LLM__UseLiteLLM: "false"
-      LLM__DirectProvider__Provider: Anthropic
-      LLM__DirectProvider__ApiKey: "${ANTHROPIC_API_KEY}"
-      LLM__DirectProvider__Model: claude-sonnet-4-6
+      LLM__DirectProvider__Provider: "${LLM_DIRECT_PROVIDER:-Anthropic}"
+      LLM__DirectProvider__ApiKey: "${LLM_DIRECT_API_KEY:-no-key}"
+      LLM__DirectProvider__Model: "${LLM_DIRECT_MODEL:-claude-sonnet-4-6}"
+      LLM__DirectProvider__Endpoint: "${LLM_DIRECT_ENDPOINT}"
       AdminPortal__CorsOrigin: "${PORTAL_ORIGIN:-http://localhost:6010}"
       Verification__Mode: LlmVerifier
       Verification__ConfidenceThreshold: "0.5"

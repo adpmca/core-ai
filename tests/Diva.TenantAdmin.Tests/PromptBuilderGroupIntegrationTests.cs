@@ -1,9 +1,12 @@
+using Diva.Core.Configuration;
 using Diva.Core.Models;
 using Diva.Infrastructure.Data.Entities;
 using Diva.Infrastructure.Learning;
+using Diva.Infrastructure.Optimization;
 using Diva.TenantAdmin.Prompts;
 using Diva.TenantAdmin.Services;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 
 namespace Diva.TenantAdmin.Tests;
@@ -45,6 +48,14 @@ public class PromptBuilderGroupIntegrationTests
         return svc;
     }
 
+    private static IAgentOptimizationService EmptyOptimizationService()
+    {
+        var svc = Substitute.For<IAgentOptimizationService>();
+        svc.GetFewShotExamplesAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new List<FewShotExampleDto>());
+        return svc;
+    }
+
     private static TenantAwarePromptBuilder Build(
         ITenantBusinessRulesService? rules = null,
         ITenantGroupService? groups = null,
@@ -53,6 +64,8 @@ public class PromptBuilderGroupIntegrationTests
             rules   ?? EmptyRulesService(),
             session ?? EmptySessionManager(),
             groups  ?? GroupServiceWith(),
+            EmptyOptimizationService(),
+            Options.Create(new AgentOptions()),
             NullLogger<TenantAwarePromptBuilder>.Instance);
 
     // ── Group rules injected ──────────────────────────────────────────────────

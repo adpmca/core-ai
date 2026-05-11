@@ -8,6 +8,7 @@ using Diva.Agents.Supervisor;
 using Diva.Agents.Supervisor.Stages;
 using Diva.Core.Configuration;
 using Diva.Core.Models;
+using Diva.Core.Optimization;
 using Diva.Host.Hubs;
 using Diva.Infrastructure.A2A;
 using Diva.Infrastructure.Auth;
@@ -26,8 +27,10 @@ using Diva.Sso;
 using Diva.TenantAdmin.Prompts;
 using Diva.TenantAdmin.Services;
 using Diva.TenantAdmin.Services.Enrichers;
+using Diva.Infrastructure.Optimization;
 using Diva.Tools.Core;
 using Diva.Tools.FileSystem;
+using Diva.Tools.Optimization;
 using Diva.Tools.FileSystem.Abstractions;
 using Diva.Tools.FileSystem.Readers;
 using Diva.Tools.FileSystem.Writers;
@@ -191,7 +194,8 @@ builder.Services.AddSingleton<ScriptThrottle>();
 builder.Services
     .AddMcpServer(opts => opts.ServerInfo = new() { Name = "diva-mcp", Version = "1.0" })
     .WithHttpTransport()
-    .WithDivaMcpTools<FileSystemMcpTools>();
+    .WithDivaMcpTools<FileSystemMcpTools>()
+    .WithDivaMcpTools<AgentOptimizationMcpTools>();
 // Phase 5 future: .WithDivaMcpTools<AnalyticsMcpTools>()
 
 // ── Agents ─────────────────────────────────────────────────────────────────
@@ -262,6 +266,15 @@ builder.Services.AddSingleton<ITenantGroupService, TenantGroupService>();
 
 // ── Phase 18: Group Agent Overlays ────────────────────────────────────────────────────
 builder.Services.AddSingleton<IGroupAgentOverlayService, GroupAgentOverlayService>();
+
+// ── Phase 24: Agent Optimization ─────────────────────────────────────────────────────
+builder.Services.AddSingleton<IOptimizationRulePackAccessor, OptimizationRulePackAccessor>();
+builder.Services.AddSingleton<ITurnScoringService, TurnScoringService>();
+builder.Services.AddSingleton<ISessionAnalyzer, SessionAnalyzer>();
+builder.Services.AddSingleton<IOptimizationLlmAnalyzer, OptimizationLlmAnalyzer>();
+builder.Services.AddScoped<OptimizationApplicator>();
+builder.Services.AddSingleton<IAgentOptimizationService, AgentOptimizationService>();
+builder.Services.AddHostedService<OptimizationSchedulerHostedService>();
 
 // ── OpenTelemetry ──────────────────────────────────────────────────────────
 var otelEndpoint = builder.Configuration["OTel:Endpoint"] ?? "http://localhost:4317";
@@ -357,25 +370,77 @@ using (var scope = app.Services.CreateScope())
         }
     }
 
-    // ── Seed platform LLM config from appsettings.json if DB row not yet created ──
-    var hasConfig = await db.PlatformLlmConfigs.AnyAsync();
-    if (!hasConfig)
+    // ── Phase 24: Idempotent score column additions (EnsureCreated path) ──────
+    {
+        var conn = traceDb.Database.GetDbConnection();
+        if (conn.State != System.Data.ConnectionState.Open)
+            await conn.OpenAsync();
+        var scoreColumns = new[] { "FaithfulnessScore", "CompletenessScore", "ToolEfficiencyScore", "CoherenceScore" };
+        foreach (var col in scoreColumns)
+        {
+            await using var check = conn.CreateCommand();
+            check.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('TraceSessionTurns') WHERE name='{col}'";
+            var exists = await check.ExecuteScalarAsync();
+            if (exists is long c && c == 0)
+            {
+                await using var alter = conn.CreateCommand();
+                alter.CommandText = $"ALTER TABLE TraceSessionTurns ADD COLUMN {col} REAL";
+                await alter.ExecuteNonQueryAsync();
+            }
+        }
+        // ScoresAvailable column (INTEGER/bool)
+        await using var checkBool = conn.CreateCommand();
+        checkBool.CommandText = "SELECT COUNT(*) FROM pragma_table_info('TraceSessionTurns') WHERE name='ScoresAvailable'";
+        var boolExists = await checkBool.ExecuteScalarAsync();
+        if (boolExists is long bc && bc == 0)
+        {
+            await using var alterBool = conn.CreateCommand();
+            alterBool.CommandText = "ALTER TABLE TraceSessionTurns ADD COLUMN ScoresAvailable INTEGER NOT NULL DEFAULT 0";
+            await alterBool.ExecuteNonQueryAsync();
+        }
+        await conn.CloseAsync();
+        Log.Information("Phase 24: Turn scoring columns verified/added to TraceSessionTurns");
+    }
+
+    // ── Seed/sync platform LLM config from env vars ───────────────────────────
+    // Creates the row on first startup; updates Provider/Model/Endpoint/ApiKey
+    // when env vars are changed (so updating docker-compose.yml takes effect on restart).
+    // ApiKey is only overwritten from env if the env value differs — preserves manual
+    // admin-panel updates when the env key is unchanged.
     {
         var llmOpts = scope.ServiceProvider.GetRequiredService<IOptions<LlmOptions>>().Value;
-        db.PlatformLlmConfigs.Add(new PlatformLlmConfigEntity
+        var dp = llmOpts.DirectProvider;
+        var existing = await db.PlatformLlmConfigs.FirstOrDefaultAsync(p => p.Id == 1);
+        if (existing is null)
         {
-            Id             = 1,
-            Provider       = llmOpts.DirectProvider.Provider,
-            ApiKey         = llmOpts.DirectProvider.ApiKey,
-            Model          = llmOpts.DirectProvider.Model,
-            Endpoint       = llmOpts.DirectProvider.Endpoint,
-            DeploymentName = llmOpts.DirectProvider.DeploymentName,
-            AvailableModelsJson = llmOpts.AvailableModels.Count > 0
-                ? System.Text.Json.JsonSerializer.Serialize(llmOpts.AvailableModels)
-                : null,
-        });
-        await db.SaveChangesAsync();
-        Log.Information("Seeded PlatformLlmConfig from appsettings.json");
+            db.PlatformLlmConfigs.Add(new PlatformLlmConfigEntity
+            {
+                Id             = 1,
+                Provider       = dp.Provider,
+                ApiKey         = dp.ApiKey,
+                Model          = dp.Model,
+                Endpoint       = dp.Endpoint,
+                DeploymentName = dp.DeploymentName,
+                AvailableModelsJson = llmOpts.AvailableModels.Count > 0
+                    ? System.Text.Json.JsonSerializer.Serialize(llmOpts.AvailableModels) : null,
+            });
+            await db.SaveChangesAsync();
+            Log.Information("Seeded PlatformLlmConfig: provider={Provider} model={Model}", dp.Provider, dp.Model);
+        }
+        else if (!existing.Provider.Equals(dp.Provider, StringComparison.OrdinalIgnoreCase)
+                 || existing.Model != dp.Model
+                 || existing.Endpoint != dp.Endpoint)
+        {
+            // Env vars changed — sync structural fields; update ApiKey only if it changed too
+            existing.Provider  = dp.Provider;
+            existing.Model     = dp.Model;
+            existing.Endpoint  = dp.Endpoint;
+            if (existing.ApiKey != dp.ApiKey)
+                existing.ApiKey = dp.ApiKey;
+            existing.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+            Log.Information("Updated PlatformLlmConfig from env: provider={Provider} model={Model}", dp.Provider, dp.Model);
+        }
     }
 }
 

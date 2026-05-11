@@ -1,9 +1,12 @@
+using Diva.Core.Configuration;
 using Diva.Core.Models;
 using Diva.Infrastructure.Data.Entities;
 using Diva.Infrastructure.Learning;
+using Diva.Infrastructure.Optimization;
 using Diva.TenantAdmin.Prompts;
 using Diva.TenantAdmin.Services;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 
 namespace Diva.TenantAdmin.Tests;
@@ -16,12 +19,24 @@ public class PromptBuilderTests
     private static TenantAwarePromptBuilder Build(
         ITenantBusinessRulesService? rules = null,
         ISessionRuleManager? session = null,
-        ITenantGroupService? groups = null)
+        ITenantGroupService? groups = null,
+        IAgentOptimizationService? optimization = null)
     {
-        var r = rules   ?? DefaultRulesService();
-        var s = session ?? DefaultSessionManager();
-        var g = groups  ?? DefaultGroupService();
-        return new TenantAwarePromptBuilder(r, s, g, NullLogger<TenantAwarePromptBuilder>.Instance);
+        var r = rules        ?? DefaultRulesService();
+        var s = session      ?? DefaultSessionManager();
+        var g = groups       ?? DefaultGroupService();
+        var o = optimization ?? DefaultOptimizationService();
+        return new TenantAwarePromptBuilder(
+            r, s, g, o, Options.Create(new AgentOptions()),
+            NullLogger<TenantAwarePromptBuilder>.Instance);
+    }
+
+    private static IAgentOptimizationService DefaultOptimizationService()
+    {
+        var svc = Substitute.For<IAgentOptimizationService>();
+        svc.GetFewShotExamplesAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new List<FewShotExampleDto>());
+        return svc;
     }
 
     private static ITenantGroupService DefaultGroupService()

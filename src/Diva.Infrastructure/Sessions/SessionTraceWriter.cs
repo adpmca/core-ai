@@ -1,8 +1,12 @@
+using Diva.Core.Configuration;
 using Diva.Core.Models;
 using Diva.Infrastructure.Data;
 using Diva.Infrastructure.Data.Entities;
+using Diva.Infrastructure.Optimization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Diva.Infrastructure.Sessions;
 
@@ -47,10 +51,22 @@ public sealed class SessionTraceWriter
     private string _agentId = string.Empty;
     private string _agentName = string.Empty;
 
-    public SessionTraceWriter(SessionTraceDbContext db, ILogger<SessionTraceWriter> logger)
+    private readonly ITurnScoringService _scoringService;
+    private readonly AgentOptions _opts;
+    private readonly IHostApplicationLifetime _appLifetime;
+
+    public SessionTraceWriter(
+        SessionTraceDbContext db,
+        ITurnScoringService scoringService,
+        IOptions<AgentOptions> opts,
+        IHostApplicationLifetime appLifetime,
+        ILogger<SessionTraceWriter> logger)
     {
-        _db = db;
-        _logger = logger;
+        _db             = db;
+        _scoringService = scoringService;
+        _opts           = opts.Value;
+        _appLifetime    = appLifetime;
+        _logger         = logger;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -371,6 +387,32 @@ public sealed class SessionTraceWriter
             }
 
             await _db.SaveChangesAsync(ct);
+
+            // Fire-and-forget per-turn LLM scoring (Phase 24)
+            if (_opts.Optimization.EnablePerTurnScoring)
+            {
+                var toolEvidence = BuildToolEvidence(_iterations);
+                var capturedSessionId = sessionId;
+                var capturedAgentId   = agentId;
+                var capturedTurn      = turnNumber;
+                var capturedUser      = userMessage;
+                var capturedAssistant = assistantMessage;
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _scoringService.ScoreTurnAsync(
+                            capturedSessionId, capturedTurn, capturedAgentId,
+                            capturedUser, capturedAssistant, toolEvidence,
+                            _appLifetime.ApplicationStopping);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Turn scoring failed for session {S}", capturedSessionId);
+                    }
+                }, CancellationToken.None);
+            }
+
             ResetBuffer();
         }
         catch (Exception ex)
@@ -378,6 +420,23 @@ public sealed class SessionTraceWriter
             _logger.LogWarning(ex, "SessionTraceWriter.FlushTurnAsync failed for session {SessionId}", sessionId);
             ResetBuffer();
         }
+    }
+
+    private static string BuildToolEvidence(List<IterationBuffer> iterations)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var iter in iterations)
+        {
+            foreach (var tc in iter.ToolCalls)
+            {
+                if (!string.IsNullOrEmpty(tc.ToolOutput))
+                {
+                    sb.Append(tc.ToolName).Append(": ").AppendLine(
+                        tc.ToolOutput.Length > 200 ? tc.ToolOutput[..200] + "..." : tc.ToolOutput);
+                }
+            }
+        }
+        return sb.ToString();
     }
 
     /// <summary>

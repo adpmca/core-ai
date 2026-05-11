@@ -72,7 +72,7 @@ Update status in INDEX.md when moving a phase from `[ ]` → `[~]` → `[x]`.
 **All three tiers and Phases 1–18 + Phase 22 are complete.** Auth/SSO login flow and multi-tenant isolation are now active (2026-03-25). Two items remain deferred:
 
 ### Remaining Work
-- **Phase 19** (foundation complete [2026-05-06]): Coordinator Sub-Agent Routing — foundation (7-gap SOLID refactor, `LlmDecompositionStrategy`, `AgentContextStage`, `IReadableAgentRegistry`, `ICapabilityScoringService`, `ResponseSynthesizer`, `IToolSelectionStrategy`/`LlmToolSelector`) is complete. Remaining: `OrchestratorAgent`, `ScopedAgentRegistry`, `SubAgentIdsJson` DB field, `SubAgentSelector.tsx`. See [docs/phase-19-coordinator-sub-agent-routing.md](docs/phase-19-coordinator-sub-agent-routing.md).
+- **Phase 19** (foundation complete [2026-05-06]): Coordinator Sub-Agent Routing — foundation (7-gap SOLID refactor, `LlmDecompositionStrategy`, `AgentContextStage`, `IReadableAgentRegistry`, `ICapabilityScoringService`, `ResponseSynthesizer`, `IToolSelectionStrategy`/`LlmToolSelector`) is complete. **Remaining work is enhancement-only** [2026-05-10]: Phase 14 Agents-as-Tools (`DelegateAgentIdsJson`) already covers most coordinator use cases via UI-configurable peer delegation. The remaining pieces (`OrchestratorAgent`, `ScopedAgentRegistry`, `SubAgentIdsJson` DB field, `SubAgentSelector.tsx`) add hard agent isolation + true pipeline-level parallelism — implement when 5+ sub-agents or auditable decomposition is required. See [docs/phase-19-coordinator-sub-agent-routing.md](docs/phase-19-coordinator-sub-agent-routing.md).
 - **Phase 5** (deferred): `AnalyticsMcpServer`, `ReservationMcpServer` — domain MCP tool servers. Deferred until real data backends are available.
 
 ### What's Complete

@@ -62,6 +62,12 @@ public class DivaDbContext : DbContext
     // ── Embeddable Chat Widgets ───────────────────────────────────────────────
     public DbSet<WidgetConfigEntity> WidgetConfigs => Set<WidgetConfigEntity>();
 
+    // ── Phase 24: Agent Optimization ──────────────────────────────────────────
+    public DbSet<AgentOptimizationRunEntity> OptimizationRuns => Set<AgentOptimizationRunEntity>();
+    public DbSet<AgentOptimizationSuggestionEntity> OptimizationSuggestions => Set<AgentOptimizationSuggestionEntity>();
+    public DbSet<AgentOptimizationConfigEntity> OptimizationConfigs => Set<AgentOptimizationConfigEntity>();
+    public DbSet<FewShotExampleEntity> FewShotExamples => Set<FewShotExampleEntity>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -349,6 +355,32 @@ public class DivaDbContext : DbContext
             .HasQueryFilter(e => _currentTenantId == 0 || e.TenantId == _currentTenantId);
         modelBuilder.Entity<WidgetConfigEntity>()
             .HasIndex(e => new { e.TenantId, e.IsActive });
+
+        // ── Phase 24: Agent Optimization ─────────────────────
+        modelBuilder.Entity<AgentOptimizationRunEntity>()
+            .HasQueryFilter(e => _currentTenantId == 0 || e.TenantId == _currentTenantId);
+        modelBuilder.Entity<AgentOptimizationRunEntity>()
+            .HasIndex(e => new { e.TenantId, e.AgentId, e.StartedAt });
+
+        modelBuilder.Entity<AgentOptimizationSuggestionEntity>()
+            .HasQueryFilter(e => _currentTenantId == 0 || e.TenantId == _currentTenantId);
+        modelBuilder.Entity<AgentOptimizationSuggestionEntity>()
+            .HasOne(s => s.Run)
+            .WithMany(r => r.Suggestions)
+            .HasForeignKey(s => s.RunId)
+            .OnDelete(DeleteBehavior.Cascade);
+        modelBuilder.Entity<AgentOptimizationSuggestionEntity>()
+            .HasIndex(e => new { e.TenantId, e.AgentId, e.Status });
+
+        modelBuilder.Entity<AgentOptimizationConfigEntity>()
+            .HasQueryFilter(e => _currentTenantId == 0 || e.TenantId == _currentTenantId);
+        modelBuilder.Entity<AgentOptimizationConfigEntity>()
+            .HasIndex(e => new { e.TenantId, e.AgentId }).IsUnique();
+
+        modelBuilder.Entity<FewShotExampleEntity>()
+            .HasQueryFilter(e => _currentTenantId == 0 || e.TenantId == _currentTenantId);
+        modelBuilder.Entity<FewShotExampleEntity>()
+            .HasIndex(e => new { e.TenantId, e.AgentId, e.SortOrder });
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken ct = default)

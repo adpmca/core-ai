@@ -7,6 +7,7 @@ using Anthropic.SDK.Messaging;
 using Diva.Core.Configuration;
 using Diva.Core.Models;
 using Diva.Infrastructure.Data;
+using Diva.Infrastructure.LiteLLM;
 using Diva.TenantAdmin.Prompts;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -49,6 +50,7 @@ public sealed class AgentSetupAssistant : IAgentSetupAssistant
     private readonly IArchetypeRegistry _archetypes;
     private readonly PromptTemplateStore _promptStore;
     private readonly IDatabaseProviderFactory _db;
+    private readonly ILlmConfigResolver _resolver;
     private readonly ILogger<AgentSetupAssistant> _logger;
 
     public AgentSetupAssistant(
@@ -58,6 +60,7 @@ public sealed class AgentSetupAssistant : IAgentSetupAssistant
         IArchetypeRegistry archetypes,
         PromptTemplateStore promptStore,
         IDatabaseProviderFactory db,
+        ILlmConfigResolver resolver,
         ILogger<AgentSetupAssistant> logger)
     {
         _llm = llm.Value;
@@ -67,6 +70,7 @@ public sealed class AgentSetupAssistant : IAgentSetupAssistant
         _archetypes = archetypes;
         _promptStore = promptStore;
         _db = db;
+        _resolver = resolver;
         _logger = logger;
     }
 
@@ -106,7 +110,7 @@ public sealed class AgentSetupAssistant : IAgentSetupAssistant
 
         var systemInstruction = "You are a JSON-only AI agent configuration expert. Respond ONLY with valid JSON. No markdown fences.";
         var raw = await TryCallLlmAsync(systemInstruction, userPrompt, _maxSuggestionTokens,
-            nameof(SuggestSystemPromptAsync), ct);
+            nameof(SuggestSystemPromptAsync), ctx.TenantId, ctx.AgentId, ct);
         if (raw is null) return new PromptSuggestionDto();
 
         return ParsePromptSuggestion(raw);
@@ -151,7 +155,7 @@ public sealed class AgentSetupAssistant : IAgentSetupAssistant
 
         var systemInstruction = "You are a JSON-only AI agent rule pack designer. Respond ONLY with a valid JSON array. No markdown fences.";
         var raw = await TryCallLlmAsync(systemInstruction, userPrompt, _maxRulePackTokens,
-            nameof(SuggestRulePacksAsync), ct);
+            nameof(SuggestRulePacksAsync), ctx.TenantId, ctx.AgentId, ct);
         if (raw is null) return [];
 
         return ParseAndValidateRulePacks(raw);
@@ -180,7 +184,7 @@ public sealed class AgentSetupAssistant : IAgentSetupAssistant
 
         var systemInstruction = "You are a JSON-only regex expert. Respond ONLY with valid JSON. No markdown fences.";
         var raw = await TryCallLlmAsync(systemInstruction, userPrompt, _maxSuggestionTokens,
-            nameof(SuggestRegexAsync), ct);
+            nameof(SuggestRegexAsync), tenantId, null, ct);
         if (raw is null) return new RegexSuggestionDto();
 
         return ParseAndValidateRegex(raw, request);
@@ -363,24 +367,60 @@ public sealed class AgentSetupAssistant : IAgentSetupAssistant
 
     // ── LLM Calls ────────────────────────────────────────────────────────────
 
-    private async Task<string> CallLlmAsync(string systemPrompt, string userPrompt, CancellationToken ct)
-        => await CallLlmAsync(systemPrompt, userPrompt, _maxSuggestionTokens, ct);
-
-    private async Task<string> CallLlmAsync(string systemPrompt, string userPrompt, int maxTokens, CancellationToken ct)
+    private async Task<(string provider, string apiKey, string model, string? endpoint)>
+        ResolveProviderAsync(int tenantId, string? agentId, CancellationToken ct)
     {
-        return _llm.DirectProvider.Provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
-            ? await CallAnthropicAsync(systemPrompt, userPrompt, maxTokens, ct)
-            : await CallOpenAiCompatibleAsync(systemPrompt, userPrompt, maxTokens, ct);
+        if (tenantId > 0)
+        {
+            try
+            {
+                int? agentLlmConfigId = null;
+                string? agentModelId = null;
+                if (!string.IsNullOrEmpty(agentId))
+                {
+                    using var db = _db.CreateDbContext(TenantContext.System(tenantId));
+                    var agent = await db.AgentDefinitions
+                        .FirstOrDefaultAsync(a => a.Id == agentId, ct);
+                    if (agent is not null)
+                    {
+                        agentLlmConfigId = agent.LlmConfigId;
+                        agentModelId = agent.ModelId;
+                    }
+                }
+                var resolved = await _resolver.ResolveAsync(tenantId, agentLlmConfigId, agentModelId, ct);
+                var provider = resolved.Provider ?? _llm.DirectProvider.Provider;
+                var apiKey   = resolved.ApiKey   ?? _llm.DirectProvider.ApiKey;
+                var model    = resolved.Model    ?? _llm.DirectProvider.Model;
+                var endpoint = resolved.Endpoint;
+                var isAnthropic = provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase);
+                if (!isAnthropic && endpoint is null)
+                    endpoint = _llm.DirectProvider.Endpoint;
+                _logger.LogDebug(
+                    "AgentSetupAssistant resolved: tenant={TenantId} agent={AgentId} llmConfigId={LlmConfigId} provider={Provider} model={Model}",
+                    tenantId, agentId, agentLlmConfigId, provider, model);
+                return (provider, apiKey, model, endpoint);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "LlmConfigResolver failed for tenant {TenantId} agent {AgentId} in AgentSetupAssistant — using appsettings fallback", tenantId, agentId);
+            }
+        }
+        return (_llm.DirectProvider.Provider, _llm.DirectProvider.ApiKey, _llm.DirectProvider.Model, _llm.DirectProvider.Endpoint);
     }
 
     /// <summary>
-    /// Calls the LLM and returns raw text, or null on failure (logs warning).
-    /// Eliminates the repeated try/catch pattern in suggestion methods.
+    /// Calls the LLM using the LLM provider configured for the given agent (falls back to tenant → platform → appsettings).
     /// </summary>
     private async Task<string?> TryCallLlmAsync(
-        string systemInstruction, string userPrompt, int maxTokens, string callSite, CancellationToken ct)
+        string systemInstruction, string userPrompt, int maxTokens, string callSite, int tenantId, string? agentId, CancellationToken ct)
     {
-        try { return await CallLlmAsync(systemInstruction, userPrompt, maxTokens, ct); }
+        try
+        {
+            var (provider, apiKey, model, endpoint) = await ResolveProviderAsync(tenantId, agentId, ct);
+            return provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
+                ? await CallAnthropicAsync(systemInstruction, userPrompt, maxTokens, apiKey, model, ct)
+                : await CallOpenAiCompatibleAsync(systemInstruction, userPrompt, maxTokens, apiKey, model, endpoint, ct);
+        }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "{CallSite} LLM call failed", callSite);
@@ -388,13 +428,12 @@ public sealed class AgentSetupAssistant : IAgentSetupAssistant
         }
     }
 
-    private async Task<string> CallAnthropicAsync(string systemPrompt, string userPrompt, int maxTokens, CancellationToken ct)
+    private async Task<string> CallAnthropicAsync(string systemPrompt, string userPrompt, int maxTokens, string apiKey, string model, CancellationToken ct)
     {
-        var opts = _llm.DirectProvider;
-        var client = new AnthropicClient(new APIAuthentication(opts.ApiKey));
+        var client = new AnthropicClient(new APIAuthentication(apiKey));
         var parameters = new MessageParameters
         {
-            Model = opts.Model,
+            Model = model,
             MaxTokens = maxTokens,
             System = [new SystemMessage(systemPrompt)],
             Messages = [new Message
@@ -408,15 +447,14 @@ public sealed class AgentSetupAssistant : IAgentSetupAssistant
         return msg.Content.OfType<Anthropic.SDK.Messaging.TextContent>().FirstOrDefault()?.Text ?? "{}";
     }
 
-    private async Task<string> CallOpenAiCompatibleAsync(string systemPrompt, string userPrompt, int maxTokens, CancellationToken ct)
+    private async Task<string> CallOpenAiCompatibleAsync(string systemPrompt, string userPrompt, int maxTokens, string apiKey, string model, string? endpoint, CancellationToken ct)
     {
-        var opts = _llm.DirectProvider;
-        var credential = new ApiKeyCredential(string.IsNullOrEmpty(opts.ApiKey) ? "no-key" : opts.ApiKey);
+        var credential = new ApiKeyCredential(string.IsNullOrEmpty(apiKey) ? "no-key" : apiKey);
         var clientOpts = new OpenAIClientOptions();
-        if (!string.IsNullOrEmpty(opts.Endpoint))
-            clientOpts.Endpoint = new Uri(opts.Endpoint);
+        if (!string.IsNullOrEmpty(endpoint))
+            clientOpts.Endpoint = new Uri(endpoint);
 
-        var chatClient = new OpenAIClient(credential, clientOpts).GetChatClient(opts.Model);
+        var chatClient = new OpenAIClient(credential, clientOpts).GetChatClient(model);
         var messages = new ChatMessage[]
         {
             new SystemChatMessage(systemPrompt),

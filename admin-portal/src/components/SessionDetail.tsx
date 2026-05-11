@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router";
-import { api } from "../api";
+import { api, markTurnAsExample } from "../api";
 import type { SessionDetail as SessionDetailDto, TurnSummary, IterationDetail, SessionTreeNode } from "../api";
 import SessionToolCallCard from "./SessionToolCallCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -62,6 +62,21 @@ export default function SessionDetail() {
     if (!confirm("Soft-delete this session trace?")) return;
     await api.deleteSession(id);
     navigate(-1);
+  };
+
+  const handleAnalyzeSession = () => {
+    if (!id || !session) return;
+    navigate(`/agents/${session.agentId}/optimize?sessionId=${id}`);
+  };
+
+  const handleMarkAsExample = async (turnNumber: number) => {
+    if (!id) return;
+    const desc = prompt("Add a description for this example (optional):");
+    if (desc === null) return; // cancelled
+    try {
+      await markTurnAsExample(id, turnNumber, desc || undefined);
+      alert("Turn marked as example.");
+    } catch (e: any) { setError(e?.error ?? "Failed to mark as example"); }
   };
 
   if (loadingSession) return (
@@ -133,13 +148,17 @@ export default function SessionDetail() {
           )}
         </dl>
 
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={handleExport} className="gap-1">
             <Download className="size-3" /> Export
           </Button>
           <Button variant="outline" size="sm" onClick={handleDelete}
             className="gap-1 text-destructive border-destructive/40 hover:bg-destructive/10">
             <Trash2 className="size-3" /> Delete
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleAnalyzeSession}
+            className="gap-1 text-blue-600 border-blue-300 hover:bg-blue-50">
+            Analyze Session
           </Button>
         </div>
 
@@ -202,12 +221,18 @@ export default function SessionDetail() {
               <CardContent className="p-3">
                 <div className="flex items-center justify-between mb-1">
                   <p className="text-xs font-medium text-primary">User — Turn {selectedTurn.turnNumber}</p>
-                  {selectedTurn.userMessage && selectedTurn.userMessage.length > MSG_PREVIEW_THRESHOLD && (
-                    <Button variant="ghost" size="sm" className="h-5 px-1 text-xs text-muted-foreground gap-1"
-                      onClick={() => setFullTextDialog({ title: `Turn ${selectedTurn.turnNumber} — User message`, content: selectedTurn.userMessage! })}>
-                      <Maximize2 className="size-3" /> Full
+                  <div className="flex gap-1">
+                    <Button variant="ghost" size="sm" className="h-5 px-1 text-xs text-yellow-600 gap-1"
+                      onClick={() => handleMarkAsExample(selectedTurn.turnNumber)}>
+                      ★ Example
                     </Button>
-                  )}
+                    {selectedTurn.userMessage && selectedTurn.userMessage.length > MSG_PREVIEW_THRESHOLD && (
+                      <Button variant="ghost" size="sm" className="h-5 px-1 text-xs text-muted-foreground gap-1"
+                        onClick={() => setFullTextDialog({ title: `Turn ${selectedTurn.turnNumber} — User message`, content: selectedTurn.userMessage! })}>
+                        <Maximize2 className="size-3" /> Full
+                      </Button>
+                    )}
+                  </div>
                 </div>
                 <p className="text-sm whitespace-pre-wrap">{selectedTurn.userMessage ?? selectedTurn.userMessagePreview}</p>
               </CardContent>

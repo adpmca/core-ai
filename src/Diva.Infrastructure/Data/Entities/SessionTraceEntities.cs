@@ -53,6 +53,13 @@ public class TraceSessionTurnEntity
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? CompletedAt { get; set; }
 
+    // LLM-as-Judge dimension scores (null until scored)
+    public float? FaithfulnessScore { get; set; }
+    public float? CompletenessScore { get; set; }
+    public float? ToolEfficiencyScore { get; set; }
+    public float? CoherenceScore { get; set; }
+    public bool ScoresAvailable { get; set; } = false;
+
     public TraceSessionEntity Session { get; set; } = null!;
     public List<TraceIterationEntity> Iterations { get; set; } = [];
 }
