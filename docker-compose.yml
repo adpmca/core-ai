@@ -26,6 +26,7 @@ services:
       Agent__MaxIterations: "10"
       Agent__LlmStreamIdleTimeoutSeconds: "${AGENT_LLM_STREAM_IDLE_TIMEOUT_SECONDS:-300}"
       Agent__LlmTimeoutSeconds: "${AGENT_LLM_TIMEOUT_SECONDS:-300}"
+      Agent__ToolTimeoutSeconds: "300"
       Agent__RuleLearning__ApprovalMode: RequireAdmin
       Agent__RuleLearning__ConfidenceThreshold: "0.8"
       # Credentials vault master key — MUST be a stable base64-encoded 32-byte key.
