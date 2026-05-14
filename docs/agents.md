@@ -350,6 +350,75 @@ adds a new tool group to the single shared MCP server.
 
 ---
 
+## Vision Pipeline (Local LLM Endpoints)
+
+Local OpenAI-compatible endpoints (LM Studio, Ollama / llama.cpp) **cannot** process images
+in follow-up tool-result messages — llama.cpp returns 400 for multi-turn image injection.
+
+### How it works
+
+1. `view_image` MCP tool reads the image, resizes to `Base64MaxDimensionPx` (default 2048 px),
+   re-encodes as JPEG Q92 (PNG kept as-is), returns JSON with `imageBase64` + `imageMediaType`.
+2. `ToolExecutor.ExtractEmbeddedImageParts` detects these fields and promotes them to
+   `ImageContentPart` objects (stored on `UnifiedToolResult.ContentParts`).
+3. After each tool iteration, `AnthropicAgentRunner` checks `strategy.UseVisionSummarization`.
+   - **`OpenAiProviderStrategy`** — `UseVisionSummarization = true` when `_currentEndpoint` is set
+     (i.e. any custom local endpoint). Makes two focused `HttpClient` calls per image:
+     - Pass 1: "Objects & Inventory" — every physical item with type, brand, color, position
+     - Pass 2: "Text & Labels" — all visible text, prices, signs, transcribed exactly
+   - **`AnthropicProviderStrategy`** — `UseVisionSummarization = false`; images injected natively
+     as `ImageContent` blocks (Anthropic handles multi-turn images correctly).
+4. The combined text description replaces the image in the tool result so the main LLM receives
+   prose, not pixels.
+
+### LmStudioVisionPolicy
+
+`PipelinePolicy` (BeforeTransport) that percent-decodes base64 payloads in data URIs.
+.NET's `Uri` class encodes `+→%2B`, `=→%3D`, `/→%2F` when `DataContent` is built from bytes —
+LM Studio returns `{"error":"Invalid url."}` on percent-encoded payloads.
+The policy finds `;base64,PAYLOAD"` segments and applies `Uri.UnescapeDataString`.
+The `data:TYPE;base64,` prefix is preserved — LM Studio requires it.
+
+### Key gotchas
+
+| Pitfall | Detail |
+|---------|--------|
+| Raw base64 without prefix | LM Studio returns `{"error":"Invalid url."}`. Always use `data:TYPE;base64,...` format. |
+| Percent-encoded base64 | `+`, `=`, `/` must NOT be percent-encoded. `LmStudioVisionPolicy` fixes this for the ME.AI path; `SummarizeImageAsync` uses raw `HttpClient` to avoid it entirely. |
+| 1×1 pixel images | Model returns `"Invalid image detected at index 0"` — use real images for testing. |
+| `UseVisionSummarization` guard | Returns `false` when `_currentEndpoint` is null. If the agent's LLM config has no endpoint (Anthropic native), summarization is skipped and images are injected directly — correct for Anthropic, wrong for a misconfigured local endpoint. |
+| JPEG re-encoding | `ImageReader` converts WebP/BMP/TIFF/GIF → JPEG. llama.cpp rejects WebP natively with `400 url must be a base64 encoded image`. |
+| max_tokens per pass | Each vision pass allows 2048 output tokens. Dense scenes may be truncated. The two-pass approach doubles effective coverage (objects + text separately). |
+
+### Config
+
+```json
+"Image": {
+  "Base64MaxDimensionPx": 2048,   // resize cap before vision encoding (0 = no resize)
+  "ImagesEnabled": true
+}
+```
+
+Override per `view_image` call via `maxDimensionOverride` parameter (agent can pass higher value for dense scenes).
+
+### Diagnostic endpoints (temporary)
+
+```
+GET  /api/debug/vision-probe?endpoint=&model=   # five-format probe (text, PNG/JPEG × data-URI/raw)
+POST /api/debug/vision-probe/summarize           # two-pass summarize with caller-supplied base64
+```
+
+Both are `[AllowAnonymous]` and bypass `TenantContextMiddleware`. Delete once vision is confirmed stable.
+
+### Test script
+
+```powershell
+.\tools\test-vision-summarize.ps1 -ImagePath "C:\path\to\photo.jpg" `
+    -LlmEndpoint "http://10.0.0.172:1234" -Model "google/gemma-4-e4b"
+```
+
+---
+
 ## MCP Credential Vault & Tool Call Authentication
 
 MCP tool bindings support three authentication methods, resolved per-request in `McpConnectionManager`:

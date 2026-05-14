@@ -51,15 +51,20 @@ internal static class ReActToolHelper
 
     /// <summary>
     /// Returns true when a tool's text output represents a failure.
-    /// Covers: thrown exceptions ("Error: ..."), timeouts, empty output, and
-    /// JSON error objects returned by the tool server itself ({"status":"error",...}).
+    /// Covers: thrown exceptions ("Error: ..."), timeouts, empty output,
+    /// JSON {"status":"error",...} objects, and the FileSystem tool's {"error":"...","message":"..."} format.
     /// </summary>
     internal static bool IsToolOutputError(string output) =>
         string.IsNullOrWhiteSpace(output) ||
         output.StartsWith("Error:") ||
         output.Contains("timed out") ||
         (output.TrimStart().StartsWith("{") &&
-         (output.Contains("\"status\":\"error\"") || output.Contains("\"status\": \"error\"")));
+         (output.Contains("\"status\":\"error\"")       || output.Contains("\"status\": \"error\"") ||
+          output.Contains("\"error\":\"AccessDenied\"") ||
+          output.Contains("\"error\":\"IoError\"")      ||
+          output.Contains("\"error\":\"ToolDisabled\"") ||
+          output.Contains("\"error\":\"WriteDisabled\"") ||
+          output.Contains("\"error\":\"ScriptDisabled\"")));
 
     /// <summary>
     /// Truncates <paramref name="output"/> to <paramref name="maxChars"/> characters,

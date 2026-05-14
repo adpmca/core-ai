@@ -37,14 +37,15 @@ public sealed class LlmRuleExtractor
     public async Task<List<SuggestedRule>> ExtractAsync(
         string conversationTranscript,
         string sessionId,
-        CancellationToken ct)
+        CancellationToken ct,
+        ResolvedLlmConfig? agentConfig = null)
     {
         _logger.LogDebug("Extracting rules from transcript (session={SessionId})", sessionId);
 
         try
         {
             var prompt = BuildPrompt(conversationTranscript);
-            var conf   = await _resolver.ResolveAsync(0, null, null, ct);
+            var conf   = agentConfig ?? await _resolver.ResolveAsync(0, null, null, ct);
             var raw    = conf.Provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase)
                 ? await CallAnthropicAsync(prompt, conf, ct)
                 : await CallOpenAiCompatibleAsync(prompt, conf, ct);

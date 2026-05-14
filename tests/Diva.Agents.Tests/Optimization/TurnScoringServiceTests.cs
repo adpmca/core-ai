@@ -1,12 +1,14 @@
 using Diva.Core.Configuration;
 using Diva.Infrastructure.Data;
 using Diva.Infrastructure.Data.Entities;
+using Diva.Infrastructure.LiteLLM;
 using Diva.Infrastructure.Optimization;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using NSubstitute;
 
 namespace Diva.Agents.Tests.Optimization;
 
@@ -63,6 +65,7 @@ public class TurnScoringServiceTests : IAsyncDisposable
             llmOpts,
             agentOpts,
             provider.GetRequiredService<IServiceScopeFactory>(),
+            Substitute.For<ILlmConfigResolver>(),
             NullLogger<TurnScoringService>.Instance);
     }
 

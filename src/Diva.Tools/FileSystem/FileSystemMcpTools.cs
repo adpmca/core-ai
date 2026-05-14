@@ -57,6 +57,13 @@ public sealed class FileSystemMcpTools(
     private string ScriptDisabledError() =>
         JsonSerializer.Serialize(new { error = "ScriptDisabled", message = "Script execution is disabled (AllowScript=false)." }, _json);
 
+    private string ViewImagePathHint(string baseMessage)
+    {
+        var roots = guard.GetAllowedRoots();
+        if (roots.Count == 0) return baseMessage;
+        return $"{baseMessage} Allowed base path(s): {string.Join(", ", roots)}. Use the full absolute path.";
+    }
+
     private void LogDebug(string tool, McpServerContext ctx, long startMs) =>
         logger.LogDebug("{Tool} tenant={TenantId} elapsedMs={Ms}", tool, ctx.TenantId,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - startMs);
@@ -151,7 +158,10 @@ public sealed class FileSystemMcpTools(
     }
 
     [McpServerTool(Name = "read_image")]
-    [Description("Analyse an image and return metadata, quality metrics, and EXIF. Set includeBase64=true to get the full image as base64 (imageBase64 + imageMediaType) for passing to a vision LLM. Images larger than Base64MaxDimensionPx (default 1568) are automatically resized before encoding to save tokens.")]
+    [Description("Analyse an image and return TEXT metadata only (format, dimensions, quality metrics, EXIF). " +
+                 "IMPORTANT: Does NOT send visual content to the LLM — you cannot see what is IN the image using this tool. " +
+                 "Use view_image instead whenever the user asks what is in an image or needs visual analysis. " +
+                 "Set includeBase64=true only if you need raw base64 bytes exported as text for some other purpose.")]
     public string ReadImage(
         [Description("Absolute path to the image file")] string path,
         [Description("Return full image as base64 (imageBase64 + imageMediaType). Images wider/taller than Base64MaxDimensionPx are auto-resized first.")] bool includeBase64 = false,
@@ -186,6 +196,45 @@ public sealed class FileSystemMcpTools(
         catch (UnauthorizedAccessException ex) { logger.LogWarning("read_image access denied: {Msg}", ex.Message); return AccessError(ex.Message); }
         catch (ArgumentException ex)           { logger.LogWarning("read_image bad path: {Msg}", ex.Message); return AccessError(ex.Message); }
         catch (IOException ex)                 { logger.LogWarning("read_image io error: {Msg}", ex.Message); return IoError(ex.Message); }
+    }
+
+    [McpServerTool(Name = "view_image")]
+    [Description("Send an image file to the vision LLM as a visual content block so it can SEE and describe what is IN the image. " +
+                 "This is the ONLY tool that gives the LLM actual vision — use it whenever the user asks what is in an image, " +
+                 "wants it described, or needs any visual analysis. " +
+                 "Requires a full absolute path. If you get an access error, call get_allowed_roots to find the valid base path, " +
+                 "then construct the full path from there. " +
+                 "The image is automatically resized to fit within the configured token budget before being sent.")]
+    public string ViewImage(
+        [Description("Absolute path to the image file")] string path,
+        [Description("Max dimension override in pixels (0 = server default, typically 1568)")] int maxDimensionOverride = 0)
+    {
+        if (!filter.IsEnabled("view_image")) return DisabledError("view_image");
+        if (!_opts.ImagesEnabled) return AccessError("Image reading is disabled (ImagesEnabled=false).");
+        var ctx = McpServerContext.FromHttpContext(http);
+        var t = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        try
+        {
+            var canonical = guard.Validate(path);
+            var imageOpts = new ImageOptions
+            {
+                ExtractExif            = _opts.Image.ExtractExif,
+                ComputeQualityMetrics  = _opts.Image.ComputeQualityMetrics,
+                ReturnBase64           = true,
+                Base64MaxDimensionPx   = maxDimensionOverride > 0 ? maxDimensionOverride : _opts.Image.Base64MaxDimensionPx,
+                ReturnThumbnail        = false,
+                MaxImageFileSizeBytes  = _opts.Image.MaxImageFileSizeBytes,
+                BlurThreshold          = _opts.Image.BlurThreshold,
+                ExposureUnderThreshold = _opts.Image.ExposureUnderThreshold,
+                ExposureOverThreshold  = _opts.Image.ExposureOverThreshold
+            };
+            var result = imageReader.Analyze(canonical, imageOpts);
+            LogDebug("view_image", ctx, t);
+            return JsonSerializer.Serialize(result, _json);
+        }
+        catch (UnauthorizedAccessException ex) { logger.LogWarning("view_image access denied: {Msg}", ex.Message); return AccessError(ViewImagePathHint(ex.Message)); }
+        catch (ArgumentException ex)           { logger.LogWarning("view_image bad path: {Msg}", ex.Message); return AccessError(ViewImagePathHint(ex.Message)); }
+        catch (IOException ex)                 { logger.LogWarning("view_image io error: {Msg}", ex.Message); return IoError(ex.Message); }
     }
 
     [McpServerTool(Name = "list_directory")]

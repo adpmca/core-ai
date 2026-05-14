@@ -25,7 +25,7 @@ public sealed class FileSystemOptions
 
     // ── Tool availability ──────────────────────────────────────────────────
     // Empty = all tools enabled. Non-empty = only listed names enabled.
-    // Valid names: read_file, read_pdf, get_image_info, read_image, list_directory,
+    // Valid names: read_file, read_pdf, get_image_info, read_image, view_image, list_directory,
     //              get_file_info, search_files, get_allowed_roots,
     //              list_zip, read_zip_entry,
     //              write_file, append_file, copy_file, create_directory,
@@ -72,8 +72,8 @@ public sealed class ImageOptions
     public bool ComputeQualityMetrics { get; set; } = true;
     public bool ReturnBase64 { get; set; } = false;
     // When ReturnBase64=true, resize the image so its longest side does not exceed this value before
-    // encoding. 0 = no resize. Default 1568 matches Claude's vision input limit.
-    public int Base64MaxDimensionPx { get; set; } = 1200;
+    // encoding. 0 = no resize.
+    public int Base64MaxDimensionPx { get; set; } = 2048;
     public bool ReturnThumbnail { get; set; } = true;
     public int ThumbnailMaxDimension { get; set; } = 256;
     public long MaxImageFileSizeBytes { get; set; } = 20 * 1024 * 1024;

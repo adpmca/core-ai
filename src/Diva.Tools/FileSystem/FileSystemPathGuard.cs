@@ -94,6 +94,21 @@ public sealed class FileSystemPathGuard(
 
     private string NormalizeLlmPath(string path)
     {
+        // Case 4: Filename-only input (e.g. "shop.jpg") — no directory component at all.
+        // Search each AllowedBasePath directly for the file and return the first match found.
+        bool isFilenameOnly = !Path.IsPathRooted(path)
+            && !path.Contains(Path.DirectorySeparatorChar)
+            && !path.Contains('/');
+        if (isFilenameOnly)
+        {
+            foreach (var basePath in _opts.AllowedBasePaths)
+            {
+                var candidate = Path.Combine(Path.GetFullPath(basePath), path);
+                if (File.Exists(candidate))
+                    return candidate;
+            }
+        }
+
         foreach (var basePath in _opts.AllowedBasePaths)
         {
             var baseNorm = Path.GetFullPath(basePath).TrimEnd(Path.DirectorySeparatorChar);

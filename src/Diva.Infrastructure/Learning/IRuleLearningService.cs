@@ -1,9 +1,12 @@
+using Diva.Infrastructure.LiteLLM;
+
 namespace Diva.Infrastructure.Learning;
 
 public interface IRuleLearningService
 {
     Task<List<SuggestedRule>> ExtractRulesFromConversationAsync(
-        string sessionId, string conversationTranscript, CancellationToken ct);
+        string sessionId, string conversationTranscript, CancellationToken ct,
+        ResolvedLlmConfig? agentConfig = null);
 
     Task<RuleSaveResult> SaveLearnedRuleAsync(
         int tenantId, SuggestedRule rule, RuleApprovalMode mode, CancellationToken ct);

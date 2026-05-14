@@ -24,7 +24,9 @@ public sealed class TenantContextMiddleware
         "/api/auth/login", "/api/auth/callback", "/api/auth/providers",
         "/api/auth/local", "/api/auth/discover",
         "/api/auth/setup", "/api/auth/admin",
-        "/api/auth/logout", "/api/auth/logout-callback"
+        "/api/auth/logout", "/api/auth/logout-callback",
+        "/api/debug/vision-probe",
+        "/api/debug/vision-probe/summarize"
     };
 
     public TenantContextMiddleware(

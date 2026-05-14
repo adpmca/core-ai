@@ -1,4 +1,5 @@
 using System.ClientModel;
+using System.ClientModel.Primitives;
 using Diva.Core.Configuration;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
@@ -22,7 +23,12 @@ public sealed class OpenAiProvider : IOpenAiProvider
         var credential    = new ApiKeyCredential(key);
         var clientOptions = new OpenAIClientOptions();
         if (!string.IsNullOrEmpty(endpoint))
+        {
             clientOptions.Endpoint = new Uri(endpoint);
+            // Local endpoints (LM Studio, Ollama, llama.cpp) reject standard data-URI image format.
+            // They expect raw base64 in the url field. Strip the "data:TYPE;base64," prefix.
+            clientOptions.AddPolicy(LmStudioVisionPolicy.Instance, PipelinePosition.BeforeTransport);
+        }
 
         return new OpenAIClient(credential, clientOptions)
             .GetChatClient(model)

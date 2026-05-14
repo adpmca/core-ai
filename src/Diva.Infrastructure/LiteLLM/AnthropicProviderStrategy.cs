@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Anthropic.SDK.Messaging;
 using Diva.Core.Configuration;
+using Diva.Core.Models;
 using Diva.Infrastructure.Context;
 using Diva.Infrastructure.Sessions;
 using Microsoft.Extensions.AI;
@@ -101,7 +102,12 @@ internal sealed class AnthropicProviderStrategy : ILlmProviderStrategy
 
     // ── Initialisation ────────────────────────────────────────────────────────
 
-    public void Initialize(string systemPrompt, List<ConversationTurn> history, string userQuery, List<McpClientTool> mcpTools)
+    public void Initialize(
+        string systemPrompt,
+        List<ConversationTurn> history,
+        string userQuery,
+        List<McpClientTool> mcpTools,
+        IReadOnlyList<ContentPart>? attachments = null)
     {
         _messages             = new List<Message>();
         _slidingCacheBoundary = null;
@@ -122,11 +128,41 @@ internal sealed class AnthropicProviderStrategy : ILlmProviderStrategy
                 lastHist.Content[^1].CacheControl = new CacheControl { Type = CacheControlType.ephemeral };
         }
 
-        _messages.Add(new Message
+        // Attachments (images/docs) go BEFORE the text block per Anthropic best practice.
+        var userContent = new List<ContentBase>();
+        foreach (var part in attachments ?? [])
         {
-            Role    = RoleType.User,
-            Content = [new Anthropic.SDK.Messaging.TextContent { Text = userQuery }]
-        });
+            switch (part)
+            {
+                case ImageContentPart img:
+                    userContent.Add(new ImageContent
+                    {
+                        Source = new ImageSource
+                        {
+                            Type      = img.Data is not null ? SourceType.base64 : SourceType.url,
+                            MediaType = img.MediaType,
+                            Data      = img.Data,
+                            Url       = img.Url
+                        }
+                    });
+                    break;
+                case DocumentContentPart doc:
+                    userContent.Add(new DocumentContent
+                    {
+                        Title  = doc.Title,
+                        Source = new DocumentSource
+                        {
+                            Type      = doc.Data is not null ? SourceType.base64 : SourceType.url,
+                            MediaType = doc.MediaType,
+                            Data      = doc.Data,
+                            Url       = doc.Url
+                        }
+                    });
+                    break;
+            }
+        }
+        userContent.Add(new Anthropic.SDK.Messaging.TextContent { Text = userQuery });
+        _messages.Add(new Message { Role = RoleType.User, Content = userContent });
 
         _tools = mcpTools.Count > 0 ? mcpTools.Select(t => ToAnthropicTool(t)).ToList() : null;
         // Note: Anthropic.SDK.Common.Tool has no CacheControl property; tool caching is
@@ -303,12 +339,45 @@ internal sealed class AnthropicProviderStrategy : ILlmProviderStrategy
         _messages.Add(new Message { Role = RoleType.Assistant, Content = _lastResponse.Content });
     }
 
+    private static List<ContentBase> BuildToolResultContent(UnifiedToolResult r)
+    {
+        if (r.ContentParts is not { Count: > 0 })
+            return [new Anthropic.SDK.Messaging.TextContent { Text = r.Output }];
+
+        var blocks = new List<ContentBase>();
+        foreach (var part in r.ContentParts)
+        {
+            switch (part)
+            {
+                case ImageContentPart img:
+                    blocks.Add(new ImageContent
+                    {
+                        Source = new ImageSource
+                        {
+                            Type      = img.Data is not null ? SourceType.base64 : SourceType.url,
+                            MediaType = img.MediaType,
+                            Data      = img.Data,
+                            Url       = img.Url
+                        }
+                    });
+                    break;
+                case TextContentPart tp:
+                    blocks.Add(new Anthropic.SDK.Messaging.TextContent { Text = tp.Text });
+                    break;
+            }
+        }
+        // Always append text output as a summary when no TextContentPart is present.
+        if (!r.ContentParts.OfType<TextContentPart>().Any() && !string.IsNullOrEmpty(r.Output))
+            blocks.Add(new Anthropic.SDK.Messaging.TextContent { Text = r.Output });
+        return blocks;
+    }
+
     public void AddToolResults(IReadOnlyList<UnifiedToolResult> results)
     {
         var toolResults = results.Select(r => (ContentBase)new Anthropic.SDK.Messaging.ToolResultContent
         {
             ToolUseId = r.ToolCallId,
-            Content   = [new Anthropic.SDK.Messaging.TextContent { Text = r.Output }],
+            Content   = BuildToolResultContent(r),
             IsError   = r.IsError
         }).ToList();
 

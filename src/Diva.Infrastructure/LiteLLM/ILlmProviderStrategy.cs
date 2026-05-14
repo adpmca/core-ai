@@ -1,4 +1,5 @@
 using Diva.Core.Configuration;
+using Diva.Core.Models;
 using Diva.Infrastructure.Sessions;
 using Microsoft.Extensions.AI;
 using ModelContextProtocol.Client;
@@ -13,7 +14,12 @@ namespace Diva.Infrastructure.LiteLLM;
 internal interface ILlmProviderStrategy
 {
     /// <summary>Build initial message history from conversation turns + user query, and set tool definitions.</summary>
-    void Initialize(string systemPrompt, List<ConversationTurn> history, string userQuery, List<McpClientTool> mcpTools);
+    void Initialize(
+        string systemPrompt,
+        List<ConversationTurn> history,
+        string userQuery,
+        List<McpClientTool> mcpTools,
+        IReadOnlyList<ContentPart>? attachments = null);
 
     /// <summary>Add extra tools (e.g. agent delegation tools) to the existing tool set after initialization.</summary>
     void AddExtraTools(IReadOnlyList<AIFunction> tools);
@@ -42,6 +48,20 @@ internal interface ILlmProviderStrategy
 
     /// <summary>Add tool results to the internal message history (respects OpenAI ordering rules).</summary>
     void AddToolResults(IReadOnlyList<UnifiedToolResult> results);
+
+    /// <summary>
+    /// True for local LLM endpoints (LM Studio, Ollama) that cannot process images in
+    /// follow-up messages after tool calls. When true, the runner calls SummarizeImageAsync
+    /// to get a text description before injecting tool results.
+    /// </summary>
+    bool UseVisionSummarization => false;
+
+    /// <summary>
+    /// Makes a clean single-turn vision call and returns a text description of the image.
+    /// Only called when UseVisionSummarization is true.
+    /// </summary>
+    Task<string> SummarizeImageAsync(ImageContentPart img, CancellationToken ct)
+        => Task.FromResult(string.Empty);
 
     /// <summary>Append a user message to the internal message history.</summary>
     void AddUserMessage(string text);
@@ -91,7 +111,12 @@ internal sealed record UnifiedLlmResponse(
 internal sealed record UnifiedToolCall(string Id, string Name, string InputJson);
 
 /// <summary>A tool execution result to be fed back to the LLM.</summary>
-internal sealed record UnifiedToolResult(string ToolCallId, string ToolName, string Output, bool IsError);
+internal sealed record UnifiedToolResult(
+    string ToolCallId,
+    string ToolName,
+    string Output,
+    bool IsError,
+    IReadOnlyList<ContentPart>? ContentParts = null);
 
 /// <summary>
 /// Token counts from the most recent LLM call. Fields default to 0 when unavailable.

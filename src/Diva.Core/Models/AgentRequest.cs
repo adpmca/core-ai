@@ -41,4 +41,10 @@ public sealed class AgentRequest
     /// No-op when TenantContext.AccessToken is null (dev mode / API key auth).
     /// </summary>
     public bool ForwardSsoToMcp { get; init; }
+
+    /// <summary>
+    /// Images or documents to pass inline to the LLM for this turn only.
+    /// Not persisted in session history — attachments apply to the current turn only.
+    /// </summary>
+    public IReadOnlyList<ContentPart> Attachments { get; init; } = [];
 }

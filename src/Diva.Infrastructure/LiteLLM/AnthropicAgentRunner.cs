@@ -1,3 +1,4 @@
+using System.ClientModel;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
@@ -398,7 +399,7 @@ public sealed class AnthropicAgentRunner : IAgentRunner
                     endpointOverride: resolvedEndpoint);  // null = provider native; set = custom URL
 
             // OpenAI strategy receives the combined prompt; Anthropic strategy uses constructor fields.
-            strategy.Initialize(systemPrompt, history, request.Query, allMcpTools);
+            strategy.Initialize(systemPrompt, history, request.Query, allMcpTools, request.Attachments);
 
             // ── Inject agent delegation tools ────────────────────────────────────
             var agentDelegationTools = new List<AgentDelegationTool>();
@@ -491,7 +492,7 @@ public sealed class AnthropicAgentRunner : IAgentRunner
                     staticSystemPrompt, dynamicSystemPrompt, effectiveModel,
                     resolvedProvider, resolvedEndpoint ?? string.Empty, allMcpTools,
                     toolClientMap, mcpClients, agentWindowOverride, hooks, hookCtx,
-                    agentDelegationTools, tenant, sw, turnState, ct))
+                    agentDelegationTools, tenant, sw, turnState, resolved, ct))
                 {
                     traceWriter?.CaptureChunk(chunk);
                     if (chunk.Type == "error") traceError = true;
@@ -536,6 +537,7 @@ public sealed class AnthropicAgentRunner : IAgentRunner
         TenantContext tenant,
         System.Diagnostics.Stopwatch sw,
         SessionTurnState turnState,
+        ResolvedLlmConfig? resolvedLlmConfig,
         [EnumeratorCancellation] CancellationToken ct)
     {
         var toolsUsed    = new List<string>();
@@ -1009,13 +1011,14 @@ public sealed class AnthropicAgentRunner : IAgentRunner
                         SessionId    = sessionId,
                     };
 
-                var transcript        = $"User: {userQuery}\nAgent: {finalResponse}";
-                var capturedSessionId = sessionId;
+                var transcript          = $"User: {userQuery}\nAgent: {finalResponse}";
+                var capturedSessionId   = sessionId;
+                var capturedLlmConfig   = resolvedLlmConfig;
                 _ = Task.Run(async () =>
                 {
                     try
                     {
-                        await _ruleLearner.ExtractRulesFromConversationAsync(capturedSessionId, transcript, CancellationToken.None);
+                        await _ruleLearner.ExtractRulesFromConversationAsync(capturedSessionId, transcript, CancellationToken.None, capturedLlmConfig);
                     }
                     catch (Exception ex)
                     {
@@ -1129,8 +1132,8 @@ public sealed class AnthropicAgentRunner : IAgentRunner
             if (startEx is not null)
             {
                 _logger.LogWarning(startEx,
-                    "StreamLlmAsync failed at start (iter={Iter}, agent={Agent}) — falling back to CallLlmAsync",
-                    iteration, agentName);
+                    "StreamLlmAsync failed at start (iter={Iter}, agent={Agent}) — falling back to CallLlmAsync{Detail}",
+                    iteration, agentName, GetLlmErrorDetail(startEx));
                 needBufferedFallback = true;
             }
 
@@ -1159,8 +1162,8 @@ public sealed class AnthropicAgentRunner : IAgentRunner
                         // Mid-stream failure (connection drop, idle timeout, etc.)
                         // Discard partial deltas and fall back to buffered call with retry.
                         _logger.LogWarning(iterEx,
-                            "StreamLlmAsync failed mid-stream (iter={Iter}, agent={Agent}) — falling back to CallLlmAsync",
-                            iteration, agentName);
+                            "StreamLlmAsync failed mid-stream (iter={Iter}, agent={Agent}) — falling back to CallLlmAsync{Detail}",
+                            iteration, agentName, GetLlmErrorDetail(iterEx));
                         textDeltas.Clear();
                         needBufferedFallback = true;
                         break;
@@ -1295,16 +1298,16 @@ public sealed class AnthropicAgentRunner : IAgentRunner
                     var agentResult = await _agentToolExecutor.ExecuteAsync(
                         agentTool, gInputJson, tenant, currentDelegationDepth, effectiveMaxToolChars, ct,
                         hookCtx.Request.ForwardSsoToMcp, parentSessionId: sessionId);
-                    return (Group: group, agentResult.Output, agentResult.Failed, agentResult.Error);
+                    return (Group: group, agentResult.Output, ContentParts: (IReadOnlyList<ContentPart>?)null, agentResult.Failed, agentResult.Error);
                 }
 
                 var toolResult = await _toolExecutor.ExecuteAsync(gName, gInputJson, toolClientMap, mcpClients, effectiveMaxToolChars, ct);
-                return (Group: group, toolResult.Output, toolResult.Failed, toolResult.Error);
+                return (Group: group, toolResult.Output, ContentParts: toolResult.ContentParts, toolResult.Failed, toolResult.Error);
             }
             finally { throttle?.Release(); }
         }));
 
-        var finalGroupOutputs = new List<(string Name, string InputJson, List<UnifiedToolCall> Originals, string Output, bool Failed, Exception? Error)>();
+        var finalGroupOutputs = new List<(string Name, string InputJson, List<UnifiedToolCall> Originals, string Output, IReadOnlyList<ContentPart>? ContentParts, bool Failed, Exception? Error)>();
         bool pipelineStreamError = false;
         foreach (var groupOutput in groupOutputs)
         {
@@ -1326,14 +1329,14 @@ public sealed class AnthropicAgentRunner : IAgentRunner
                                 retryAgentTool, groupOutput.Group.InputJson, tenant,
                                 currentDelegationDepth, effectiveMaxToolChars, ct,
                                 hookCtx.Request.ForwardSsoToMcp, parentSessionId: sessionId);
-                            currentOutput = (groupOutput.Group, retryResult.Output, retryResult.Failed, retryResult.Error);
+                            currentOutput = (groupOutput.Group, retryResult.Output, ContentParts: (IReadOnlyList<ContentPart>?)null, retryResult.Failed, retryResult.Error);
                         }
                         else
                         {
                             var retryResult = await _toolExecutor.ExecuteAsync(
                                 groupOutput.Group.Name, groupOutput.Group.InputJson,
                                 toolClientMap, mcpClients, effectiveMaxToolChars, ct);
-                            currentOutput = (groupOutput.Group, retryResult.Output, retryResult.Failed, retryResult.Error);
+                            currentOutput = (groupOutput.Group, retryResult.Output, ContentParts: retryResult.ContentParts, retryResult.Failed, retryResult.Error);
                         }
                     }
                     else if (action == ErrorRecoveryAction.Abort)
@@ -1350,6 +1353,7 @@ public sealed class AnthropicAgentRunner : IAgentRunner
                 currentOutput.Group.InputJson,
                 currentOutput.Group.Originals,
                 currentOutput.Output,
+                currentOutput.ContentParts,
                 currentOutput.Failed,
                 currentOutput.Error));
         }
@@ -1360,13 +1364,13 @@ public sealed class AnthropicAgentRunner : IAgentRunner
         // ── Phase 3: emit results, update history, track failures ────────────
         var toolOutputs = finalGroupOutputs
             .SelectMany(go => go.Originals.Select(
-                tc => (tc, inputJson: go.InputJson, output: go.Output, failed: go.Failed, error: go.Error, filtered: false)))
+                tc => (tc, inputJson: go.InputJson, output: go.Output, contentParts: go.ContentParts, failed: go.Failed, error: go.Error, filtered: false)))
             .Concat(suppressedToolCalls.Select(
-                tc => (tc, inputJson: tc.InputJson, output: "Tool call filtered by rule pack policy.", failed: false, error: (Exception?)null, filtered: true)))
+                tc => (tc, inputJson: tc.InputJson, output: "Tool call filtered by rule pack policy.", contentParts: (IReadOnlyList<ContentPart>?)null, failed: false, error: (Exception?)null, filtered: true)))
             .ToList();
 
         var unifiedResults = new List<UnifiedToolResult>();
-        foreach (var (tc, inputJson, toolOutput, stepFailed, _, filtered) in toolOutputs)
+        foreach (var (tc, inputJson, toolOutput, contentParts, stepFailed, _, filtered) in toolOutputs)
         {
             var finalToolOutput = toolOutput;
             if (!filtered && _hookCoordinator is not null && hooks.Count > 0)
@@ -1386,14 +1390,71 @@ public sealed class AnthropicAgentRunner : IAgentRunner
                 ToolOutput = finalToolOutput,
             });
 
-            unifiedResults.Add(new UnifiedToolResult(tc.Id, tc.Name, finalToolOutput, stepFailed));
+            // Pass content parts (e.g. image blocks from MCP tools) through to the LLM.
+            unifiedResults.Add(new UnifiedToolResult(tc.Id, tc.Name, finalToolOutput, stepFailed,
+                filtered ? null : contentParts));
             executionLog.Add((tc.Name, inputJson, finalToolOutput, !stepFailed));
             _logger.LogInformation("Tool result: {Tool} {Status} (iter={Iter}, agent={Agent}, output={Len} chars)",
                 tc.Name, stepFailed ? "FAILED" : "OK", iteration, definition.Name, finalToolOutput.Length);
             consecutiveFailures = stepFailed ? consecutiveFailures + 1 : 0;
         }
 
+        // For local LLM endpoints: summarise images via a clean single-turn vision call
+        // (llama.cpp rejects images in follow-up user messages after tool calls).
+        var totalImages = unifiedResults.Sum(r => r.ContentParts?.OfType<ImageContentPart>().Count() ?? 0);
+        if (strategy.UseVisionSummarization && totalImages > 0)
+        {
+            var resolved = new List<UnifiedToolResult>(unifiedResults.Count);
+            foreach (var r in unifiedResults)
+            {
+                var imgs = r.ContentParts?.OfType<ImageContentPart>().ToList();
+                if (imgs is not { Count: > 0 })
+                {
+                    resolved.Add(r);
+                    continue;
+                }
+
+                var descs = new List<string>();
+                foreach (var img in imgs)
+                {
+                    try
+                    {
+                        _logger.LogDebug("Vision: calling SummarizeImageAsync (tool={Tool}, mime={Mime}, dataLen={Len})",
+                            r.ToolName, img.MediaType, img.Data?.Length ?? 0);
+                        var desc = await strategy.SummarizeImageAsync(img, ct);
+                        if (!string.IsNullOrEmpty(desc)) descs.Add(desc);
+                    }
+                    catch (Exception ex)
+                    {
+                        var detail = GetLlmErrorDetail(ex);
+                        _logger.LogWarning("Vision summarization failed (tool={Tool}): {Err}{Detail}",
+                            r.ToolName, ex.Message, detail);
+                    }
+                }
+                if (descs.Count > 0)
+                {
+                    var preview = string.Join("\n", descs);
+                    if (preview.Length > 800) preview = preview[..800] + "…";
+                    _logger.LogInformation(
+                        "Vision: summarised {Count} image(s) via single-turn call (iter={Iter}, tool={Tool})\n{Preview}",
+                        descs.Count, iteration, r.ToolName, preview);
+                }
+                var combined = descs.Count > 0
+                    ? (string.IsNullOrEmpty(r.Output) ? string.Join("\n", descs)
+                       : r.Output + "\n\nVisual content:\n" + string.Join("\n", descs))
+                    : r.Output;
+                resolved.Add(new UnifiedToolResult(r.ToolCallId, r.ToolName, combined, r.IsError, null));
+            }
+            unifiedResults = resolved;
+        }
+        else if (totalImages > 0)
+        {
+            _logger.LogInformation(
+                "Vision: injecting {Count} image(s) into LLM context (iter={Iter}, agent={Agent})",
+                totalImages, iteration, definition.Name);
+        }
         strategy.AddToolResults(unifiedResults);
+
         bool hadToolErrors = toolOutputs.Any(t => t.failed);
 
         // ── Adaptive re-planning after consecutive failures ───────────────────
@@ -1484,11 +1545,19 @@ public sealed class AnthropicAgentRunner : IAgentRunner
             catch (Exception ex) when (IsTransientLlmError(ex) && attempt >= _agentOpts.Retry.MaxRetries)
             {
                 _logger.LogError(ex,
-                    "LLM call failed after {Max} retries — giving up: {Msg}",
-                    _agentOpts.Retry.MaxRetries, ex.Message);
+                    "LLM call failed after {Max} retries — giving up: {Msg}{Detail}",
+                    _agentOpts.Retry.MaxRetries, ex.Message, GetLlmErrorDetail(ex));
                 throw;
             }
         }
+    }
+
+    private static string GetLlmErrorDetail(Exception ex)
+    {
+        if (ex is not ClientResultException cre) return "";
+        var body = cre.GetRawResponse()?.Content?.ToString() ?? "";
+        if (body.Length > 800) body = body[..800] + "…";
+        return $" [HTTP {cre.Status}: {body}]";
     }
 
     private static bool IsTransientLlmError(Exception ex)

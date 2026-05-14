@@ -2,6 +2,8 @@ using Diva.Tools.FileSystem.Abstractions;
 using Diva.Tools.FileSystem.Models;
 using Microsoft.Extensions.Logging;
 using SixLabors.ImageSharp;
+using SixLabors.ImageSharp.Formats.Jpeg;
+using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.Metadata.Profiles.Exif;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
@@ -10,6 +12,8 @@ namespace Diva.Tools.FileSystem.Readers;
 
 public sealed class ImageReader(ILogger<ImageReader> logger) : IImageReader
 {
+    private readonly ILogger<ImageReader> _logger = logger;
+
     public ImageInfoResult Analyze(string filePath, ImageOptions opts)
     {
         using var image = Image.Load<Rgba32>(filePath);
@@ -58,9 +62,22 @@ public sealed class ImageReader(ILogger<ImageReader> logger) : IImageReader
                 }
 
                 using var ms = new MemoryStream();
-                if (fmt is not null) toEncode.Save(ms, fmt);
-                else                 toEncode.SaveAsJpeg(ms);
+                if (fmt is PngFormat)
+                {
+                    toEncode.SaveAsPng(ms);
+                    // imageMediaType stays "image/png"
+                }
+                else
+                {
+                    // JPEG, WebP, GIF, BMP, TIFF, unknown → JPEG.
+                    // Most vision LLMs (including LM Studio/llama.cpp) only accept JPEG and PNG.
+                    // WebP in particular causes '400 url must be a base64 encoded image' in llama.cpp.
+                    toEncode.SaveAsJpeg(ms, new JpegEncoder { Quality = 92 });
+                    imageMediaType = "image/jpeg";
+                }
                 imageBase64 = Convert.ToBase64String(ms.ToArray());
+                _logger.LogDebug("ImageReader: encoded {W}x{H} {Fmt} for vision ({SizeKb} KB base64)",
+                    toEncode.Width, toEncode.Height, imageMediaType, ms.Length / 1024);
             }
             finally
             {

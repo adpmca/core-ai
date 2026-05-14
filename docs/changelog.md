@@ -4,6 +4,102 @@
 
 ---
 
+## [2026-05-14] Vision Support for Local LLMs + User Attachments + Agent-Scoped Rule Learning
+
+### Overview
+
+Three related features shipped together: (1) end-to-end vision pipeline for LM Studio / llama.cpp
+local endpoints, (2) image/document attachments on the agent invocation request, and (3) rule
+learning that uses the calling agent's LLM config instead of the global platform endpoint.
+
+---
+
+### 1. Vision Pipeline — Local LLM Endpoints (LM Studio / llama.cpp)
+
+Local OpenAI-compatible endpoints cannot process images in follow-up tool-result messages
+(llama.cpp returns 400 for multi-turn image injection). The fix is a clean single-turn vision
+call that summarises the image as text before injecting tool results.
+
+#### New types
+
+| File | Change |
+|------|--------|
+| `src/Diva.Core/Models/ContentPart.cs` | **New** — abstract `ContentPart` base + `ImageContentPart` (`MediaType`, `Data`, `Url`), `TextContentPart`, `DocumentContentPart` |
+| `src/Diva.Infrastructure/LiteLLM/ToolExecutorResult.cs` | **New** — structured `ToolExecutorResult` record (`Output`, `ContentParts`, `Failed`, `Error`); replaces the old value-tuple return |
+| `src/Diva.Infrastructure/LiteLLM/LmStudioVisionPolicy.cs` | **New** — `PipelinePolicy` (BeforeTransport) that percent-decodes base64 payloads in data URIs. .NET's `Uri` class encodes `+→%2B`, `=→%3D`, `/→%2F` when `DataContent` is constructed from bytes, making the base64 undecodable. Policy finds `;base64,PAYLOAD"` segments and applies `Uri.UnescapeDataString`. Preserves the `data:TYPE;base64,` prefix — LM Studio requires it. |
+
+#### Tool executor — image extraction
+
+| File | Change |
+|------|--------|
+| `src/Diva.Infrastructure/LiteLLM/ToolExecutor.cs` | Return type changed from `(string, bool, Exception?)` tuple to `ToolExecutorResult`. Added two image extraction paths: (a) MCP native `ImageContentBlock` blocks captured and promoted to `ImageContentPart`; (b) `ExtractEmbeddedImageParts` detects `imageBase64` + `imageMediaType` fields in JSON tool output (produced by `view_image` / `read_image`) and promotes them to `ImageContentPart`, replacing the raw base64 with a placeholder. `UnifiedToolResult` extended with `IReadOnlyList<ContentPart>? ContentParts`. |
+
+#### Strategy interface changes
+
+| File | Change |
+|------|--------|
+| `src/Diva.Infrastructure/LiteLLM/ILlmProviderStrategy.cs` | Added `bool UseVisionSummarization` (default `false`) — true for local endpoints. Added `Task<string> SummarizeImageAsync(ImageContentPart, CancellationToken)` (default returns empty). `Initialize` signature gains `IReadOnlyList<ContentPart>? attachments` optional parameter. `UnifiedToolResult` record extended with `ContentParts` field. |
+| `src/Diva.Infrastructure/LiteLLM/OpenAiProviderStrategy.cs` | `UseVisionSummarization` returns `true` when `_currentEndpoint` is set (i.e. custom local endpoint). `SummarizeImageAsync` uses raw `HttpClient` (not ME.AI `DataContent`) to avoid .NET Uri percent-encoding — makes two focused passes: pass 1 "Objects & Inventory" prompt, pass 2 "Text & Labels" prompt; concatenates as `[Objects & Inventory]\n...\n\n[Text & Labels]\n...`. Max tokens 2048 per pass, 90 s timeout. |
+| `src/Diva.Infrastructure/LiteLLM/AnthropicProviderStrategy.cs` | Handles `ContentParts` in tool results — builds multi-block content for Anthropic SDK (`ImageContent` + `TextContent`). `Initialize` accepts attachments — prepends image/document blocks before the user text block per Anthropic best practice. |
+
+#### Agent runner changes
+
+| File | Change |
+|------|--------|
+| `src/Diva.Infrastructure/LiteLLM/AnthropicAgentRunner.cs` | After each tool iteration: counts image parts across all `UnifiedToolResult` objects. If `UseVisionSummarization && totalImages > 0`: calls `SummarizeImageAsync` per image, combines description with text output as `{output}\n\nVisual content:\n{desc}`; logs description preview (first 800 chars) at Info level. Falls back gracefully on failure (warning log with full HTTP status + body). `ExecuteReActLoopAsync` gains `ResolvedLlmConfig? resolvedLlmConfig` param — threaded from `InvokeStreamAsync` through to rule extraction background task. |
+
+#### FileSystem MCP tool changes
+
+| File | Change |
+|------|--------|
+| `src/Diva.Tools/FileSystem/FileSystemMcpTools.cs` | `view_image` tool added — reads image from path, applies `ImageOptions` (resize, quality metrics, EXIF, base64 encode), returns JSON with `imageBase64` + `imageMediaType` fields that `ToolExecutor.ExtractEmbeddedImageParts` recognises and promotes. Accepts optional `maxDimensionOverride` parameter. |
+| `src/Diva.Tools/FileSystem/Readers/ImageReader.cs` | Added base64 encode path: reads image, optionally resizes to `Base64MaxDimensionPx` max, saves as PNG (if PNG) or JPEG Q92 (all others including WebP/BMP/TIFF — llama.cpp rejects WebP). Stores result in `imageBase64` + `imageMediaType` on `ImageInfoResult`. |
+| `src/Diva.Tools/FileSystem/FileSystemOptions.cs` | `Base64MaxDimensionPx` default raised 1568 → 2048. |
+| `src/Diva.Host/appsettings.json` | Added `Image.Base64MaxDimensionPx: 2048` to Image config block (now configurable without recompile). |
+
+---
+
+### 2. User Attachments on Agent Invocation
+
+Users can now attach images or documents to the initial agent request. Attachments are injected
+into the first user message before the ReAct loop starts.
+
+| File | Change |
+|------|--------|
+| `src/Diva.Core/Models/AgentRequest.cs` | Added `IReadOnlyList<ContentPart> Attachments { get; init; } = []` |
+| `src/Diva.Host/Controllers/AgentsController.cs` | `AgentInvokeRequest` record gains `List<ContentPart>? Attachments`; passed through to `AgentRequest` |
+| `src/Diva.Infrastructure/LiteLLM/ILlmProviderStrategy.cs` | `Initialize` gains `attachments` parameter |
+| `src/Diva.Infrastructure/LiteLLM/AnthropicProviderStrategy.cs` | Injects attachment content blocks (images, documents) before the user text message |
+| `src/Diva.Infrastructure/LiteLLM/OpenAiProviderStrategy.cs` | Attachment images serialised as `image_url` content parts in the OpenAI message format |
+
+---
+
+### 3. Rule Learning — Agent-Scoped LLM Config
+
+Rule extraction previously called the global platform endpoint (`ILlmConfigResolver.ResolveAsync(tenantId:0)`).
+It now uses the calling agent's resolved LLM config so extraction uses the same provider/model/endpoint as the agent.
+
+| File | Change |
+|------|--------|
+| `src/Diva.Infrastructure/Learning/IRuleLearningService.cs` | `ExtractRulesFromConversationAsync` gains optional `ResolvedLlmConfig? agentConfig` |
+| `src/Diva.Infrastructure/Learning/RuleLearningService.cs` | Threads `agentConfig` through to extractor |
+| `src/Diva.Infrastructure/Learning/LlmRuleExtractor.cs` | `ExtractAsync` accepts optional `agentConfig`; uses it when non-null, falls back to global resolver when null |
+| `src/Diva.Infrastructure/LiteLLM/AnthropicAgentRunner.cs` | Captures `resolvedLlmConfig` at start of `InvokeStreamAsync`; passes to `ExecuteReActLoopAsync`; background rule extraction task receives the agent's config |
+
+---
+
+### 4. Diagnostic Tools (temporary, delete once vision confirmed stable)
+
+| File | Change |
+|------|--------|
+| `src/Diva.Host/Controllers/VisionProbeController.cs` | **New** — `GET /api/debug/vision-probe` tests five image formats against any endpoint/model (text-only, PNG data URI, PNG raw, JPEG data URI, JPEG raw). `POST /api/debug/vision-probe/summarize` replicates `SummarizeImageAsync` two-pass logic with a caller-supplied base64 image; returns `objects`, `text`, and `combined` fields separately. Both endpoints are `[AllowAnonymous]`. |
+| `src/Diva.Infrastructure/Auth/TenantContextMiddleware.cs` | Added `/api/debug/vision-probe` and `/api/debug/vision-probe/summarize` to `BypassPaths` |
+| `tools/test-lmstudio-vision.ps1` | New — direct LM Studio vision format probe via PowerShell `Invoke-RestMethod` |
+| `tools/test-vision-curl.ps1` | New — same probe via `curl.exe` (useful when Invoke-RestMethod mangles encoding) |
+| `tools/test-vision-summarize.ps1` | New — end-to-end test: reads a local image file, runs the format probe, then calls `/api/debug/vision-probe/summarize` and displays the two-pass description |
+
+---
+
 ## [2026-05-12] Runtime Bug Fixes — LLM Config Resolution & ToolBindings Deserialization
 
 ### Root Cause

@@ -1,5 +1,8 @@
+using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using Diva.Core.Configuration;
+using Diva.Core.Models;
 using Diva.Infrastructure.Context;
 using Diva.Infrastructure.Sessions;
 using Microsoft.Extensions.AI;
@@ -28,6 +31,9 @@ internal sealed class OpenAiProviderStrategy : ILlmProviderStrategy
     private ChatResponse? _lastResponse;
     private ChatMessage? _lastStreamedMessage;
     private TokenUsage _lastTokenUsage;
+    // Transient vision message: passed to the LLM for one call only, never stored in _messages.
+    // If the call fails (e.g. 400 from LM Studio) it is discarded rather than corrupting history.
+    private ChatMessage? _transientVisionMessage;
 
     public OpenAiProviderStrategy(
         IOpenAiProvider openAi,
@@ -48,14 +54,43 @@ internal sealed class OpenAiProviderStrategy : ILlmProviderStrategy
         _retry           = retry;
     }
 
-    public void Initialize(string systemPrompt, List<ConversationTurn> history, string userQuery, List<McpClientTool> mcpTools)
+    public void Initialize(
+        string systemPrompt,
+        List<ConversationTurn> history,
+        string userQuery,
+        List<McpClientTool> mcpTools,
+        IReadOnlyList<ContentPart>? attachments = null)
     {
         _messages = [new ChatMessage(ChatRole.System, systemPrompt)];
         foreach (var turn in history)
             _messages.Add(new ChatMessage(
                 turn.Role == "assistant" ? ChatRole.Assistant : ChatRole.User,
                 turn.Content));
-        _messages.Add(new ChatMessage(ChatRole.User, userQuery));
+
+        // Include image attachments via DataContent when the provider supports vision.
+        if (attachments is { Count: > 0 })
+        {
+            var contentList = new List<AIContent>();
+            foreach (var part in attachments)
+            {
+                switch (part)
+                {
+                    case ImageContentPart img when img.Data is not null:
+                        contentList.Add(new DataContent($"data:{img.MediaType};base64,{img.Data}", img.MediaType));
+                        break;
+                    case ImageContentPart img when img.Url is not null:
+                        contentList.Add(new DataContent(img.Url, img.MediaType));
+                        break;
+                    // DocumentContentPart: not universally supported in OpenAI-compat; omit silently.
+                }
+            }
+            contentList.Add(new TextContent(userQuery));
+            _messages.Add(new ChatMessage(ChatRole.User, contentList));
+        }
+        else
+        {
+            _messages.Add(new ChatMessage(ChatRole.User, userQuery));
+        }
 
         _chatOptions = new ChatOptions { ModelId = _model, MaxOutputTokens = _maxOutputTokens };
         if (mcpTools.Count > 0)
@@ -73,7 +108,8 @@ internal sealed class OpenAiProviderStrategy : ILlmProviderStrategy
 
     public async Task<UnifiedLlmResponse> CallLlmAsync(CancellationToken ct)
     {
-        var response = await _retry(() => _chatClient.GetResponseAsync(_messages, _chatOptions, ct), ct);
+        var callMessages = BuildCallMessages();
+        var response = await _retry(() => _chatClient.GetResponseAsync(callMessages, _chatOptions, ct), ct);
         _lastResponse = response;
         _lastTokenUsage = new TokenUsage(
             (int)(response.Usage?.InputTokenCount  ?? 0),
@@ -114,7 +150,8 @@ internal sealed class OpenAiProviderStrategy : ILlmProviderStrategy
         var functionCallsById = new Dictionary<string, FunctionCallContent>(StringComparer.Ordinal);
         ChatFinishReason? finishReason = null;
 
-        await foreach (var update in _chatClient.GetStreamingResponseAsync(_messages, _chatOptions, ct))
+        var callMessages = BuildCallMessages();
+        await foreach (var update in _chatClient.GetStreamingResponseAsync(callMessages, _chatOptions, ct))
         {
             if (update.FinishReason.HasValue)
                 finishReason = update.FinishReason;
@@ -170,6 +207,7 @@ internal sealed class OpenAiProviderStrategy : ILlmProviderStrategy
 
     public void CommitAssistantResponse()
     {
+        _transientVisionMessage = null; // consume after successful call; survives retries/fallbacks
         if (_lastStreamedMessage is not null)
         {
             _messages.Add(_lastStreamedMessage);
@@ -185,8 +223,128 @@ internal sealed class OpenAiProviderStrategy : ILlmProviderStrategy
     {
         // OpenAI format requires one ChatMessage(ChatRole.Tool) per result,
         // each immediately following the assistant tool_calls message.
+        // Tool result content is text-only (FunctionResultContent is a string).
         foreach (var result in results)
             _messages.Add(new ChatMessage(ChatRole.Tool, [new FunctionResultContent(result.ToolCallId, result.Output)]));
+
+        // For vision-capable OpenAI-compat models: inject image content as a follow-up user message.
+        // FunctionResultContent is text-only; this is the only way to pass image pixels
+        // to a vision model after a tool call in the OpenAI-compat protocol.
+        var allImages = results
+            .Where(r => r.ContentParts is { Count: > 0 })
+            .SelectMany(r => r.ContentParts!.OfType<ImageContentPart>())
+            .ToList();
+        if (allImages.Count == 0) return;
+
+        var contentList = new List<AIContent>();
+        foreach (var img in allImages)
+        {
+            if (img.Data is not null)
+                contentList.Add(new DataContent($"data:{img.MediaType};base64,{img.Data}", img.MediaType));
+            else if (img.Url is not null)
+                contentList.Add(new DataContent(img.Url, img.MediaType));
+        }
+        if (contentList.Count == 0) return;
+        contentList.Add(new TextContent("Here is the image from the tool result. Please analyze the visual content."));
+        // Store as transient — injected for the next LLM call only, never persisted in _messages.
+        // If the call fails the message is discarded, preventing 400 errors from cascading.
+        _transientVisionMessage = new ChatMessage(ChatRole.User, contentList);
+    }
+
+    // Returns _messages with the transient vision message appended if one is pending.
+    // The transient is NOT cleared here — it persists so streaming-to-buffered fallback both see it.
+    // CommitAssistantResponse() clears it after a successful call is committed.
+    private IList<ChatMessage> BuildCallMessages()
+    {
+        if (_transientVisionMessage is null) return _messages;
+        var list = new List<ChatMessage>(_messages.Count + 1);
+        list.AddRange(_messages);
+        list.Add(_transientVisionMessage);
+        return list;
+    }
+
+    /// <inheritdoc/>
+    // Local endpoints (LM Studio, llama.cpp) cannot handle images in follow-up tool-result
+    // messages. Vision summarization routes the image through a clean single-turn call instead.
+    public bool UseVisionSummarization => !string.IsNullOrEmpty(_currentEndpoint);
+
+    /// <inheritdoc/>
+    // Uses raw HttpClient instead of ME.AI DataContent to avoid .NET Uri percent-encoding
+    // of base64 chars (+→%2B, =→%3D, /→%2F). LM Studio rejects percent-encoded payloads.
+    // Makes two focused passes (objects then text) and concatenates for maximum coverage.
+    public async Task<string> SummarizeImageAsync(ImageContentPart img, CancellationToken ct)
+    {
+        if (img.Data is null && img.Url is null) return string.Empty;
+        if (string.IsNullOrEmpty(_currentEndpoint)) return string.Empty;
+
+        var imageUrl = img.Data is not null
+            ? $"data:{img.MediaType};base64,{img.Data}"
+            : img.Url!;
+
+        var endpoint = _currentEndpoint.TrimEnd('/');
+        if (!endpoint.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+            endpoint += "/v1";
+
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(90) };
+        if (!string.IsNullOrEmpty(_currentApiKey))
+            http.DefaultRequestHeaders.Add("Authorization", $"Bearer {_currentApiKey}");
+
+        var pass1 = await VisionCallAsync(http, endpoint, imageUrl,
+            "You are an inventory scanner. List EVERY physical object, product, item, and person visible in this image. " +
+            "For each: name/type, brand (if readable), color, quantity, and position (e.g. top-left shelf, center foreground). " +
+            "Include even partially visible items. Be exhaustive — missing an item is a critical error.",
+            ct);
+
+        var pass2 = await VisionCallAsync(http, endpoint, imageUrl,
+            "Read and transcribe ALL text visible in this image. " +
+            "Include product names, brand names, prices, barcodes, shelf labels, signs, stickers, handwriting. " +
+            "Group by location (e.g. top shelf, front display). Transcribe exactly as written.",
+            ct);
+
+        var parts = new List<string>(2);
+        if (!string.IsNullOrWhiteSpace(pass1)) parts.Add($"[Objects & Inventory]\n{pass1}");
+        if (!string.IsNullOrWhiteSpace(pass2)) parts.Add($"[Text & Labels]\n{pass2}");
+        return string.Join("\n\n", parts);
+    }
+
+    private async Task<string> VisionCallAsync(
+        HttpClient http, string endpoint, string imageUrl, string prompt, CancellationToken ct)
+    {
+        var body = JsonSerializer.Serialize(new
+        {
+            model      = _model,
+            max_tokens = 2048,
+            messages   = new[]
+            {
+                new
+                {
+                    role    = "user",
+                    content = new object[]
+                    {
+                        new { type = "image_url", image_url = new { url = imageUrl } },
+                        new { type = "text", text = prompt }
+                    }
+                }
+            }
+        });
+
+        var url  = $"{endpoint}/chat/completions";
+        var resp = await http.PostAsync(url,
+            new StringContent(body, Encoding.UTF8, "application/json"), ct);
+
+        var rawBody = await resp.Content.ReadAsStringAsync(ct);
+
+        if (!resp.IsSuccessStatusCode)
+            throw new HttpRequestException(
+                $"HTTP {(int)resp.StatusCode} from {url}: {rawBody}",
+                null, resp.StatusCode);
+
+        using var doc = JsonDocument.Parse(rawBody);
+        return doc.RootElement
+            .GetProperty("choices")[0]
+            .GetProperty("message")
+            .GetProperty("content")
+            .GetString() ?? string.Empty;
     }
 
     public void AddUserMessage(string text) =>

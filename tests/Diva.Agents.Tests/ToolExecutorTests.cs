@@ -23,7 +23,7 @@ public class ToolExecutorTests
     [Fact]
     public async Task ExecuteAsync_NoClientInMap_NoFallbackClients_ReturnsFailed()
     {
-        var (output, failed, error) = await _sut.ExecuteAsync(
+        var result = await _sut.ExecuteAsync(
             toolName:          "my_tool",
             inputJson:         "{}",
             toolClientMap:     [],
@@ -31,16 +31,16 @@ public class ToolExecutorTests
             maxToolResultChars: 4000,
             ct:                CancellationToken.None);
 
-        Assert.True(failed);
-        Assert.NotNull(error);
-        Assert.Contains("Error:", output);
+        Assert.True(result.Failed);
+        Assert.NotNull(result.Error);
+        Assert.Contains("Error:", result.Output);
     }
 
     [Fact]
     public async Task ExecuteAsync_ToolNotInMap_FallsBackToFirstClient_ReturnsErrorWhenNoClients()
     {
         // toolClientMap has no entry for "unknown_tool" and mcpClients is also empty
-        var (output, failed, _) = await _sut.ExecuteAsync(
+        var result = await _sut.ExecuteAsync(
             toolName:          "unknown_tool",
             inputJson:         "{}",
             toolClientMap:     new Dictionary<string, McpClient>(),
@@ -48,8 +48,8 @@ public class ToolExecutorTests
             maxToolResultChars: 4000,
             ct:                CancellationToken.None);
 
-        Assert.True(failed);
-        Assert.StartsWith("Error:", output);
+        Assert.True(result.Failed);
+        Assert.StartsWith("Error:", result.Output);
     }
 
     // ── Cancellation / timeout ────────────────────────────────────────────────
@@ -60,7 +60,7 @@ public class ToolExecutorTests
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        var (output, failed, error) = await _sut.ExecuteAsync(
+        var result = await _sut.ExecuteAsync(
             toolName:          "slow_tool",
             inputJson:         "{}",
             toolClientMap:     [],
@@ -70,8 +70,8 @@ public class ToolExecutorTests
 
         // Pre-cancelled CT may either hit the timeout path or the exception path,
         // but either way the call must complete and Failed must be true.
-        Assert.True(failed);
-        Assert.NotEmpty(output);
+        Assert.True(result.Failed);
+        Assert.NotEmpty(result.Output);
     }
 
     // ── Output truncation ─────────────────────────────────────────────────────

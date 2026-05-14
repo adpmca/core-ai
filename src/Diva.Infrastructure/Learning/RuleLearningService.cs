@@ -1,5 +1,6 @@
 using Diva.Infrastructure.Data;
 using Diva.Infrastructure.Data.Entities;
+using Diva.Infrastructure.LiteLLM;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -29,8 +30,9 @@ public sealed class RuleLearningService : IRuleLearningService
     }
 
     public Task<List<SuggestedRule>> ExtractRulesFromConversationAsync(
-        string sessionId, string conversationTranscript, CancellationToken ct)
-        => _extractor.ExtractAsync(conversationTranscript, sessionId, ct);
+        string sessionId, string conversationTranscript, CancellationToken ct,
+        ResolvedLlmConfig? agentConfig = null)
+        => _extractor.ExtractAsync(conversationTranscript, sessionId, ct, agentConfig);
 
     public async Task<RuleSaveResult> SaveLearnedRuleAsync(
         int tenantId, SuggestedRule rule, RuleApprovalMode mode, CancellationToken ct)

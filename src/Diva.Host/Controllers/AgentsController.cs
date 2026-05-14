@@ -215,7 +215,7 @@ public class AgentsController : ControllerBase
         if (!tenant.CanInvokeAgent(agent.AgentType))
             return StatusCode(403, new { error = "Access denied to this agent." });
 
-        var request = new AgentRequest { Query = req.Query, SessionId = req.SessionId, ModelId = req.ModelId, LlmConfigId = req.LlmConfigId };
+        var request = new AgentRequest { Query = req.Query, SessionId = req.SessionId, ModelId = req.ModelId, LlmConfigId = req.LlmConfigId, Attachments = req.Attachments ?? [] };
 
         var result = await _runner.RunAsync(agent, request, tenant, ct);
         return Ok(result);
@@ -240,7 +240,7 @@ public class AgentsController : ControllerBase
         Response.Headers["Cache-Control"] = "no-cache";
         Response.Headers["X-Accel-Buffering"] = "no";
 
-        var request = new AgentRequest { Query = req.Query, SessionId = req.SessionId, ModelId = req.ModelId, LlmConfigId = req.LlmConfigId, ForwardSsoToMcp = req.ForwardSsoToMcp };
+        var request = new AgentRequest { Query = req.Query, SessionId = req.SessionId, ModelId = req.ModelId, LlmConfigId = req.LlmConfigId, ForwardSsoToMcp = req.ForwardSsoToMcp, Attachments = req.Attachments ?? [] };
 
         // If the resolved agent is an IStreamableWorkerAgent (e.g. RemoteA2AAgent, DynamicReActAgent),
         // delegate streaming directly to the worker instead of going through the runner.
@@ -612,7 +612,13 @@ public class AgentsController : ControllerBase
 public record AgentSummaryDto(string Id, string Name, string DisplayName, string AgentType, string Status, bool IsEnabled, DateTime CreatedAt, bool IsShared, int? GroupId, string? GroupName, int? LlmConfigId = null, bool IsActivated = false, string? OverlayGuid = null);
 public record GroupTemplateSummaryDto(string Id, string Name, string DisplayName, string? Description, string AgentType, int GroupId, string? GroupName, bool IsEnabled, bool IsActivated, string? OverlayGuid);
 public record SetOverlayEnabledDto(bool IsEnabled);
-public record AgentInvokeRequest(string Query, string? SessionId = null, string? ModelId = null, int? LlmConfigId = null, bool ForwardSsoToMcp = false);
+public record AgentInvokeRequest(
+    string Query,
+    string? SessionId = null,
+    string? ModelId = null,
+    int? LlmConfigId = null,
+    bool ForwardSsoToMcp = false,
+    List<ContentPart>? Attachments = null);
 public record ImprovePromptRequest(string Instruction);
 public record McpProbeRequest(string? Endpoint, string? Command, List<string>? Args, bool PassSsoToken = false, string? CredentialRef = null);
 public record McpToolInfo(string Name, string Description);
