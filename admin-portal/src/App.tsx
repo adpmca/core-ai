@@ -18,6 +18,7 @@ import { GroupList } from "@/components/GroupList";
 import { GroupDetail } from "@/components/GroupDetail";
 import { GroupAgentTemplateBuilder } from "@/components/GroupAgentTemplateBuilder";
 import { PlatformLlmConfig } from "@/components/PlatformLlmConfig";
+import { PlatformAdminsPage } from "@/components/PlatformAdminsPage";
 import { RulePackManager } from "@/components/RulePackManager";
 import { PackEditor } from "@/components/PackEditor";
 import { BusinessRuleEditor } from "@/components/BusinessRuleEditor";
@@ -106,6 +107,7 @@ export default function App() {
           <Route path="platform/groups/:groupId/agents/new" element={<GroupAgentTemplateBuilder />} />
           <Route path="platform/groups/:groupId/agents/:templateId/edit" element={<GroupAgentTemplateBuilder />} />
           <Route path="platform/llm-config" element={<PlatformLlmConfig />} />
+          <Route path="platform/admins" element={<PlatformAdminsPage />} />
 
           <Route path="*" element={<DefaultRedirect />} />
         </Route>

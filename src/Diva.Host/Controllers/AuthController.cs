@@ -535,7 +535,17 @@ public class AuthController : ControllerBase
         [FromQuery] int tenantId = 1,
         CancellationToken ct = default)
     {
-        await _localAuth.DeleteUserAsync(EffectiveTenantId(tenantId), id, ct);
+        var tid = EffectiveTenantId(tenantId);
+
+        // Prevent removing the last active platform admin.
+        if (tid == 0)
+        {
+            var admins = await _localAuth.GetUsersAsync(0, ct);
+            if (admins.Count(u => u.IsActive && u.Id != id) == 0)
+                return BadRequest("Cannot delete the last active platform admin.");
+        }
+
+        await _localAuth.DeleteUserAsync(tid, id, ct);
         return NoContent();
     }
 

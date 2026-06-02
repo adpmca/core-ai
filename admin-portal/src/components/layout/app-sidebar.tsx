@@ -85,9 +85,10 @@ const platformNavGroups = [
   {
     label: "Platform Admin",
     items: [
-      { title: "Tenants",    url: "/platform/tenants",    icon: Building2, badgeKey: undefined },
-      { title: "Groups",     url: "/platform/groups",     icon: Layers,    badgeKey: undefined },
-      { title: "LLM Config", url: "/platform/llm-config", icon: Cpu,       badgeKey: undefined },
+      { title: "Tenants",    url: "/platform/tenants",    icon: Building2,  badgeKey: undefined },
+      { title: "Groups",     url: "/platform/groups",     icon: Layers,     badgeKey: undefined },
+      { title: "LLM Config", url: "/platform/llm-config", icon: Cpu,        badgeKey: undefined },
+      { title: "Admins",     url: "/platform/admins",     icon: ShieldAlert, badgeKey: undefined },
     ],
   },
 ];
