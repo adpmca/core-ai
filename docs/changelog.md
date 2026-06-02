@@ -4,6 +4,35 @@
 
 ---
 
+## [2026-06-02] Platform Administrators management
+
+Multiple platform admins can now be created and managed from the admin portal.
+Previously only a single master admin existed (created during first-time setup).
+
+### New files
+
+| File | Purpose |
+|------|---------|
+| `admin-portal/src/components/PlatformAdminsPage.tsx` | Platform admin management page — wraps `LocalUsersPanel` scoped to `tenantId=0` with `master_admin` role only |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `src/Diva.Host/Controllers/AuthController.cs` | `DeleteLocalUser`: guard prevents deleting the last active platform admin (returns `400`) |
+| `admin-portal/src/components/LocalUsersPanel.tsx` | Added `availableRoles` and `defaultRoles` props (backward-compatible; existing tenant usage unchanged) |
+| `admin-portal/src/App.tsx` | Route `/platform/admins` added |
+| `admin-portal/src/components/layout/app-sidebar.tsx` | "Admins" nav item added to Platform Admin group (`ShieldAlert` icon) |
+
+### Behaviour
+
+- Master admin navigates to **Platform Admin → Admins**
+- **Add User** creates a new `TenantId=0` user with role `master_admin` via the existing `POST /api/auth/local-users?tenantId=0` endpoint
+- New platform admins appear on the **Platform administrator? Sign in here** login form and have full access to all tenants and settings
+- Deleting is blocked if it would leave zero active platform admins
+
+---
+
 ## [2026-06-02] Bug fixes — session_id template variable, logout redirect, reverse-proxy deployment, change password & feedback page branding
 
 Five independent fixes and one new feature shipped together.
