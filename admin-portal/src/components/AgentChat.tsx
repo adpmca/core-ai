@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { useNavigate, useParams, useLocation } from "react-router";
+import { useNavigate, useParams, useLocation, useSearchParams } from "react-router";
 import DOMPurify from "dompurify";
 import { toast } from "sonner";
 import {
@@ -7,6 +7,7 @@ import {
   Bot,
   ChevronDown,
   ChevronRight,
+  History,
   RotateCcw,
   Send,
   User,
@@ -20,6 +21,7 @@ import {
   type AvailableLlmConfig,
   type VerificationResult,
   type FollowUpQuestion,
+  type TurnSummary,
 } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -75,6 +77,22 @@ interface Message {
   verification?: VerificationResult;
   followUpQuestions?: FollowUpQuestion[];
   error?: boolean;
+}
+
+// Maps stored session turns into lightweight chat bubbles for resume.
+// Intentionally does NOT backfill the full iteration/tool trace — only the
+// user/assistant text plus execution time so historical context is visible.
+function turnsToMessages(turns: TurnSummary[]): Message[] {
+  const msgs: Message[] = [];
+  for (const t of turns) {
+    msgs.push({ role: "user", text: t.userMessage ?? t.userMessagePreview ?? "" });
+    msgs.push({
+      role: "agent",
+      text: t.assistantMessage ?? t.assistantMessagePreview ?? "(no response)",
+      executionTime: t.executionTimeMs > 0 ? `${(t.executionTimeMs / 1000).toFixed(1)}s` : undefined,
+    });
+  }
+  return msgs;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -262,6 +280,7 @@ export function AgentChat() {
   const { id: agentId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const agentFromState = (location.state as { agent?: AgentSummary } | null)?.agent;
 
   const [agent, setAgent] = useState<AgentSummary | undefined>(agentFromState);
@@ -269,6 +288,7 @@ export function AgentChat() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | undefined>(undefined);
+  const [resumedTurns, setResumedTurns] = useState<number | null>(null);
   const [llmConfig, setLlmConfig] = useState<LlmConfig>({ availableModels: [], currentProvider: "", defaultModel: "" });
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [availableLlmConfigs, setAvailableLlmConfigs] = useState<AvailableLlmConfig[]>([]);
@@ -282,6 +302,7 @@ export function AgentChat() {
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const hydratedRef = useRef<string | null>(null);
 
   // Load agent definition (needed for llmConfigId) and available configs for the tenant
   useEffect(() => {
@@ -315,14 +336,41 @@ export function AgentChat() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, liveIterations, liveStatus]);
 
+  // Resume a stored session: when ?sessionId= is present, hydrate the chat with
+  // the prior turns and bind subsequent messages to the same session. The backend
+  // /continue endpoint has already reactivated the conversation memory so the LLM
+  // will replay full context on the next turn.
+  useEffect(() => {
+    const resumeId = searchParams.get("sessionId");
+    if (!resumeId || hydratedRef.current === resumeId) return;
+    hydratedRef.current = resumeId;
+
+    api.getSession(resumeId)
+      .then((detail) => {
+        setMessages(turnsToMessages(detail.turns ?? []));
+        setSessionId(resumeId);
+        setResumedTurns(detail.turns?.length ?? 0);
+      })
+      .catch((e: Error) => {
+        toast.error("Could not load session to resume", { description: e.message });
+        hydratedRef.current = null;
+        setSearchParams((p) => { p.delete("sessionId"); return p; }, { replace: true });
+      });
+  }, [searchParams, setSearchParams]);
+
   const clearChat = () => {
     abortRef.current?.abort();
+    hydratedRef.current = null;
     setMessages([]);
     setSessionId(undefined);
+    setResumedTurns(null);
     setLiveIterations([]);
     setLiveTimeline([]);
     setLiveStatus("");
     setLivePlan(null);
+    if (searchParams.has("sessionId")) {
+      setSearchParams((p) => { p.delete("sessionId"); return p; }, { replace: true });
+    }
   };
 
   const send = async () => {
@@ -553,6 +601,16 @@ export function AgentChat() {
       {/* Messages */}
       <ScrollArea className="flex-1 pr-4">
         <div className="space-y-6 pb-4">
+          {resumedTurns !== null && (
+            <div className="flex items-center gap-2 rounded-md border border-sky-500/30 bg-sky-500/5 px-3 py-2 text-xs text-muted-foreground">
+              <History className="size-3.5 text-sky-400 shrink-0" />
+              <span>
+                Resumed session{resumedTurns > 0 ? ` — ${resumedTurns} prior turn${resumedTurns !== 1 ? "s" : ""} loaded` : ""}.
+                New messages continue this conversation. Use <span className="font-medium text-foreground">Clear</span> to start fresh.
+              </span>
+            </div>
+          )}
+
           {messages.length === 0 && !loading && (
             <div className="flex flex-col items-center justify-center pt-20 gap-3">
               <div className="rounded-full bg-muted p-4">

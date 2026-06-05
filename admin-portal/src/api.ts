@@ -1144,7 +1144,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T>
     {
       // Token missing or expired — clear stale token and redirect to login
       localStorage.removeItem(storageKey("token"));
-      window.location.replace(`${import.meta.env.BASE_URL}login`);
+      window.location.replace(`${ import.meta.env.BASE_URL }login`);
       return new Promise(() => { }); // halt execution while redirecting
     }
     const body = await res.text().catch(() => "");
@@ -1641,6 +1641,8 @@ export const api = {
     return res.blob();
   },
   deleteSession: (id: string) => request<void>(`/api/sessions/${ id }`, { method: "DELETE" }),
+  continueSession: (id: string) =>
+    request<ContinueSessionResult>(`/api/sessions/${ id }/continue`, { method: "POST" }),
   purgeSessions: (olderThanDays: number, status?: string) =>
   {
     const qs = new URLSearchParams({ olderThanDays: String(olderThanDays) });
@@ -1876,6 +1878,15 @@ export interface TurnSummary
 export interface SessionDetail extends SessionSummary
 {
   turns: TurnSummary[];
+}
+
+export interface ContinueSessionResult
+{
+  sessionId: string;
+  agentId: string;
+  agentName: string;
+  turnCount: number;
+  reactivated: boolean;
 }
 
 export interface ToolCallDetail

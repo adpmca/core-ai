@@ -50,10 +50,10 @@ public sealed class AgentSessionService
         using var createDb = _db.CreateDbContext(tenant);
         var newSession = new AgentSessionEntity
         {
-            TenantId          = tenant.TenantId,
-            SiteId            = tenant.CurrentSiteId,
-            UserId            = tenant.UserId ?? "anonymous",
-            CurrentAgentType  = agentId,
+            TenantId = tenant.TenantId,
+            SiteId = tenant.CurrentSiteId,
+            UserId = tenant.UserId ?? "anonymous",
+            CurrentAgentType = agentId,
         };
         createDb.Sessions.Add(newSession);
         await createDb.SaveChangesAsync(ct);
@@ -93,6 +93,38 @@ public sealed class AgentSessionService
         await db.SaveChangesAsync(ct);
         _logger.LogDebug("Saved turn {TurnNumber} for session {SessionId}", turnNumber, sessionId);
         return turnNumber;
+    }
+
+    /// <summary>
+    /// Reactivates a stored conversation session so it can be resumed in chat.
+    /// Sets Status back to "active" and extends ExpiresAt, since
+    /// <see cref="GetOrCreateAsync"/> only replays history for active sessions.
+    /// Tenant-scoped via the supplied <see cref="TenantContext"/>.
+    /// Returns true if a matching session was found and reactivated.
+    /// </summary>
+    public async Task<bool> ReactivateAsync(
+        string sessionId,
+        TenantContext tenant,
+        CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(sessionId))
+            return false;
+
+        using var db = _db.CreateDbContext(tenant);
+        var session = await db.Sessions.FirstOrDefaultAsync(s => s.Id == sessionId, ct);
+        if (session is null)
+        {
+            _logger.LogWarning("ReactivateAsync: session {SessionId} not found for tenant {TenantId}", sessionId, tenant.TenantId);
+            return false;
+        }
+
+        session.Status = "active";
+        session.ExpiresAt = DateTime.UtcNow.AddHours(24);
+        session.LastActivityAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        _logger.LogDebug("Reactivated session {SessionId} for tenant {TenantId}", sessionId, tenant.TenantId);
+        return true;
     }
 }
 
