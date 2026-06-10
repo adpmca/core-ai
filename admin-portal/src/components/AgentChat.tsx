@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { useNavigate, useParams, useLocation, useSearchParams } from "react-router";
+import { Link, useNavigate, useParams, useLocation, useSearchParams } from "react-router";
 import DOMPurify from "dompurify";
 import { toast } from "sonner";
 import {
@@ -22,6 +22,7 @@ import {
   type VerificationResult,
   type FollowUpQuestion,
   type TurnSummary,
+  type IterationDetail,
 } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -53,6 +54,9 @@ interface ToolCall {
   name: string;
   input: string;
   output?: string;
+  isDelegation?: boolean;
+  delegatedAgentName?: string;
+  childSessionId?: string;
 }
 
 interface Iteration {
@@ -79,19 +83,47 @@ interface Message {
   error?: boolean;
 }
 
-// Maps stored session turns into lightweight chat bubbles for resume.
-// Intentionally does NOT backfill the full iteration/tool trace — only the
-// user/assistant text plus execution time so historical context is visible.
-function turnsToMessages(turns: TurnSummary[]): Message[] {
+// Maps a stored turn's iteration detail into the chat's iteration trace,
+// preserving sub-agent (delegation) calls with a link to the child session.
+function iterationsToTrace(iters: IterationDetail[]): Iteration[] {
+  return iters.map((it) => ({
+    number: it.iterationNumber,
+    thinking: it.thinkingText ?? undefined,
+    toolCalls: it.toolCalls.map((tc) => ({
+      name: tc.isAgentDelegation && tc.delegatedAgentName ? tc.delegatedAgentName : tc.toolName,
+      input: tc.toolInput ?? "",
+      output: tc.toolOutput ?? "",
+      isDelegation: tc.isAgentDelegation,
+      delegatedAgentName: tc.delegatedAgentName,
+      childSessionId: tc.childSessionId,
+    })),
+  }));
+}
+
+// Builds the resumed chat history. Loads each turn's full iteration trace in
+// parallel so historical sub-agent calls (delegations) are visible — falling
+// back to a lightweight text bubble if a turn's trace can't be loaded.
+async function buildResumedMessages(sessionId: string, turns: TurnSummary[]): Promise<Message[]> {
+  const iterLists = await Promise.all(
+    turns.map((t) =>
+      api.getTurnIterations(sessionId, t.turnNumber).catch(() => [] as IterationDetail[]),
+    ),
+  );
+
   const msgs: Message[] = [];
-  for (const t of turns) {
+  turns.forEach((t, idx) => {
     msgs.push({ role: "user", text: t.userMessage ?? t.userMessagePreview ?? "" });
+
+    const trace = iterationsToTrace(iterLists[idx]);
+    const toolsUsed = trace.flatMap((i) => i.toolCalls.map((c) => c.name));
     msgs.push({
       role: "agent",
       text: t.assistantMessage ?? t.assistantMessagePreview ?? "(no response)",
+      iterations: trace.length > 0 ? trace : undefined,
+      toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
       executionTime: t.executionTimeMs > 0 ? `${(t.executionTimeMs / 1000).toFixed(1)}s` : undefined,
     });
-  }
+  });
   return msgs;
 }
 
@@ -141,10 +173,19 @@ function IterationTrace({ iterations, detailed }: { iterations: Iteration[]; det
                 </p>
               )}
               {iter.toolCalls.map((tc, ti) => (
-                <div key={ti} className="pl-2 border-l-2 border-amber-600/50 space-y-1">
-                  <div className="font-medium text-amber-400 flex items-center gap-1">
-                    <Wrench className="size-3" />{tc.name}
+                <div key={ti} className={cn("pl-2 border-l-2 space-y-1", tc.isDelegation ? "border-violet-500/50" : "border-amber-600/50")}>
+                  <div className={cn("font-medium flex items-center gap-1", tc.isDelegation ? "text-violet-400" : "text-amber-400")}>
+                    {tc.isDelegation ? <Bot className="size-3" /> : <Wrench className="size-3" />}
+                    {tc.isDelegation ? `Sub-agent: ${tc.delegatedAgentName ?? tc.name}` : tc.name}
                     {tc.output === undefined && <span className="text-muted-foreground ml-1">⏳</span>}
+                    {tc.isDelegation && tc.childSessionId && (
+                      <Link
+                        to={`/sessions/${tc.childSessionId}`}
+                        className="ml-1 text-[10px] text-primary hover:underline"
+                      >
+                        view session
+                      </Link>
+                    )}
                   </div>
                   <pre className="text-[11px] text-foreground/70 whitespace-pre-wrap break-words bg-background/50 rounded p-1.5 overflow-auto max-h-24">
                     {tc.input}
@@ -346,10 +387,11 @@ export function AgentChat() {
     hydratedRef.current = resumeId;
 
     api.getSession(resumeId)
-      .then((detail) => {
-        setMessages(turnsToMessages(detail.turns ?? []));
+      .then(async (detail) => {
         setSessionId(resumeId);
         setResumedTurns(detail.turns?.length ?? 0);
+        const msgs = await buildResumedMessages(resumeId, detail.turns ?? []);
+        setMessages(msgs);
       })
       .catch((e: Error) => {
         toast.error("Could not load session to resume", { description: e.message });

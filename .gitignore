@@ -48,3 +48,4 @@ publish/
 docker-images/
 .github/agents/
 .playwright-mcp/
+docker-compose.tei.yml
