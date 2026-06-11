@@ -22,7 +22,20 @@ public class ResponseVerifierTests
             AgentTestFixtures.Opts(new VerificationOptions { Mode = mode }),
             AgentTestFixtures.AnthropicLlm(),
             anthropic ?? Substitute.For<IAnthropicProvider>(),
-            openAi    ?? Substitute.For<IOpenAiProvider>(),
+            openAi ?? Substitute.For<IOpenAiProvider>(),
+            NullLogger<ResponseVerifier>.Instance);
+    }
+
+    private static ResponseVerifier BuildVerifierWithOptions(
+        VerificationOptions options,
+        IAnthropicProvider? anthropic = null,
+        IOpenAiProvider? openAi = null)
+    {
+        return new ResponseVerifier(
+            AgentTestFixtures.Opts(options),
+            AgentTestFixtures.AnthropicLlm(),
+            anthropic ?? Substitute.For<IAnthropicProvider>(),
+            openAi ?? Substitute.For<IOpenAiProvider>(),
             NullLogger<ResponseVerifier>.Instance);
     }
 
@@ -174,6 +187,107 @@ public class ResponseVerifierTests
         await anthropic.DidNotReceive().GetClaudeMessageAsync(Arg.Any<MessageParameters>(), Arg.Any<CancellationToken>());
     }
 
+    // ── ToolGrounded variable confidence (action/delivery claims) ────────────
+
+    [Fact]
+    public async Task ToolGrounded_ToolsCalled_ActionClaim_LowersConfidence()
+    {
+        var verifier = BuildVerifier("ToolGrounded");
+
+        var result = await verifier.VerifyAsync(
+            "I've sent the daily briefing email to the manager and CC'd the regional director successfully.",
+            toolsUsed: ["SendEmail"],
+            toolEvidence: "[Tool: SendEmail]\n{\"status\": \"ok\"}",
+            CancellationToken.None);
+
+        Assert.True(result.IsVerified);
+        Assert.Equal("ToolGrounded", result.Mode);
+        // Action/delivery claim → confidence lowered below the plain-data 0.85 baseline
+        Assert.True(result.Confidence < 0.85f);
+    }
+
+    [Fact]
+    public async Task ToolGrounded_ToolsCalled_PlainData_KeepsBaselineConfidence()
+    {
+        var verifier = BuildVerifier("ToolGrounded");
+
+        var result = await verifier.VerifyAsync(
+            "Total revenue was $24,500 last month across 1,250 transactions, a 7.9% increase.",
+            toolsUsed: ["GetMetrics"],
+            toolEvidence: "[Tool: GetMetrics]\n{\"revenue\": 24500}",
+            CancellationToken.None);
+
+        Assert.True(result.IsVerified);
+        Assert.Equal(0.85f, result.Confidence);
+    }
+
+    // ── Auto mode escalation ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Auto_ToolsCalled_ActionClaim_EscalatesToLlmVerifier()
+    {
+        // Action/delivery claim drops heuristic confidence to 0.6 (< default 0.7 threshold)
+        // and evidence is present → Auto escalates to a non-blocking LLM cross-check.
+        var anthropic = Substitute.For<IAnthropicProvider>();
+        anthropic.GetClaudeMessageAsync(Arg.Any<MessageParameters>(), Arg.Any<CancellationToken>())
+            .Returns(MakeAnthropicResponse(
+                "{\"confidence\": 0.3, \"is_verified\": false, " +
+                "\"ungrounded_claims\": [\"email delivery cannot be confirmed from tool data\"], " +
+                "\"reasoning\": \"delivery is self-reported\"}"));
+
+        var verifier = BuildVerifier("Auto", anthropic: anthropic);
+
+        var result = await verifier.VerifyAsync(
+            "I've sent the daily briefing email and it was delivered successfully to all recipients.",
+            toolsUsed: ["SendEmail"],
+            toolEvidence: "[Tool: SendEmail]\n{\"queued\": true}",
+            CancellationToken.None);
+
+        Assert.Equal("Auto", result.Mode);
+        Assert.False(result.IsVerified);
+        Assert.NotEmpty(result.UngroundedClaims);
+        // Escalation must actually call the LLM verifier
+        await anthropic.Received(1).GetClaudeMessageAsync(Arg.Any<MessageParameters>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Auto_ActionClaim_NoEvidence_DoesNotEscalate()
+    {
+        // Low confidence but no evidence to check against → return heuristic, no LLM call.
+        var anthropic = Substitute.For<IAnthropicProvider>();
+
+        var verifier = BuildVerifier("Auto", anthropic: anthropic);
+
+        var result = await verifier.VerifyAsync(
+            "I've sent the daily briefing email and it was delivered successfully to all recipients.",
+            toolsUsed: ["SendEmail"],
+            toolEvidence: "",   // no evidence
+            CancellationToken.None);
+
+        Assert.Equal("ToolGrounded", result.Mode);
+        await anthropic.DidNotReceive().GetClaudeMessageAsync(Arg.Any<MessageParameters>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Auto_EscalationDisabled_DoesNotEscalate()
+    {
+        // AutoEscalateThreshold = 0 disables escalation entirely — heuristic verdict stands.
+        var anthropic = Substitute.For<IAnthropicProvider>();
+
+        var verifier = BuildVerifierWithOptions(
+            new VerificationOptions { Mode = "Auto", AutoEscalateThreshold = 0f },
+            anthropic: anthropic);
+
+        var result = await verifier.VerifyAsync(
+            "I've sent the daily briefing email and it was delivered successfully to all recipients.",
+            toolsUsed: ["SendEmail"],
+            toolEvidence: "[Tool: SendEmail]\n{\"queued\": true}",
+            CancellationToken.None);
+
+        Assert.Equal("ToolGrounded", result.Mode);
+        await anthropic.DidNotReceive().GetClaudeMessageAsync(Arg.Any<MessageParameters>(), Arg.Any<CancellationToken>());
+    }
+
     // ── modeOverride ─────────────────────────────────────────────────────────
 
     [Fact]
@@ -181,7 +295,7 @@ public class ResponseVerifierTests
     {
         // Global = LlmVerifier, per-agent override = Off
         var anthropic = Substitute.For<IAnthropicProvider>();
-        var verifier  = BuildVerifierWithOverride("LlmVerifier", anthropic);
+        var verifier = BuildVerifierWithOverride("LlmVerifier", anthropic);
 
         var result = await verifier.VerifyAsync(
             "Revenue was $24,500 last month with 1,250 transactions.",
@@ -203,9 +317,9 @@ public class ResponseVerifierTests
     {
         return new MessageResponse
         {
-            Content    = [new Anthropic.SDK.Messaging.TextContent { Text = text }],
+            Content = [new Anthropic.SDK.Messaging.TextContent { Text = text }],
             StopReason = "end_turn",
-            Model      = "claude-sonnet-4-20250514"
+            Model = "claude-sonnet-4-20250514"
         };
     }
 }

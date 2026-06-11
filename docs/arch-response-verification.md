@@ -54,17 +54,28 @@ Configured globally in `appsettings.json` (the default for all agents), or overr
 | `ToolGrounded` | If no tools were called, flag all factual claims | None | Lightweight production check |
 | `LlmVerifier` | Second-pass LLM call checks claims against tool evidence | ~1 extra call | High-stakes tenants |
 | `Strict` | Same as LlmVerifier but blocks the response if confidence < threshold | ~1 extra call | Finance, healthcare |
-| `Auto` | Runtime heuristic: picks cheapest sufficient check based on response length, tools called, and evidence available | 0–1 extra call | **Default** — recommended for most agents |
+| `Auto` | Runs the cheap ToolGrounded heuristic first; escalates to a non-blocking LLM cross-check only when heuristic confidence falls below `AutoEscalateThreshold` and evidence is available | 0–1 extra call | **Default** — recommended for most agents |
 
 ### Auto Mode Decision Tree
 
+Auto runs the zero-cost `ToolGrounded` heuristic first, then escalates to a (non-blocking)
+LLM cross-check only for low-confidence responses. The heuristic returns **variable confidence**:
+`0.85` for plain tool-grounded data, but `0.6` when the response makes action/delivery claims
+(e.g. "email sent", "CC'd", "delivered", "rendered") that tool *data* evidence cannot directly prove.
+
 ```
-response < 80 chars?            → Off (nothing meaningful to check)
-tools called + evidence present → LlmVerifier (full LLM check worthwhile)
-tools called, no evidence       → ToolGrounded (unexpected; cheap fallback)
-no tools + factual claims       → ToolGrounded (flag suspicious assertions)
-no tools + conversational text  → Off (skip — purely conversational)
+response < 80 chars?                 → Off (nothing meaningful to check)
+no tools + conversational text       → Off (skip — purely conversational)
+no tools + factual claims            → ToolGrounded (flag suspicious assertions, conf 0.4)
+tools called, plain data             → ToolGrounded (conf 0.85, accepted — no LLM call)
+tools called, action/delivery claim  → conf 0.6 < threshold (0.7):
+    evidence present                 →   escalate → LlmVerifier (Mode="Auto", non-blocking)
+    no evidence                      →   ToolGrounded verdict stands (no LLM call)
 ```
+
+`AutoEscalateThreshold` (default `0.7`, set to `0` to disable escalation) is the confidence floor
+below which Auto escalates. Escalated results are relabelled `Mode="Auto"` and never block the
+response — they flag ungrounded claims without disrupting delivery.
 
 ### Per-Agent Override
 
@@ -73,7 +84,8 @@ no tools + conversational text  → Off (skip — purely conversational)
 | Agent type | `VerificationMode` field | Effective mode | Cost |
 |------------|--------------------------|----------------|------|
 | Chatbot (no tools) | `null` → global `"Auto"` | Off (conversational) | 0ms |
-| Data agent (tools + evidence) | `null` → global `"Auto"` | LlmVerifier | ~500ms |
+| Data agent (plain data) | `null` → global `"Auto"` | ToolGrounded (conf 0.85) | 0ms |
+| Action agent (e.g. "email sent") | `null` → global `"Auto"` | escalates to LlmVerifier | ~500ms |
 | Compliance agent | `"Strict"` | Strict | ~500ms + blocks |
 | Dev/test agent | `"Off"` | Off | 0ms |
 
@@ -389,6 +401,7 @@ The admin portal `AgentChat` renders a verification badge under each agent respo
 "Verification": {
   "Mode": "Auto",
   "ConfidenceThreshold": 0.5,
+  "AutoEscalateThreshold": 0.7,
   "IncludeReasoningInResponse": true
 }
 ```

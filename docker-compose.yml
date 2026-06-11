@@ -24,8 +24,9 @@ services:
       # When accessed via a reverse proxy (e.g. https://ai.company.com), add that URL here.
       # Multiple values: PORTAL_ORIGIN=https://ai.company.com,http://localhost:6010
       AdminPortal__CorsOrigin: "${PORTAL_ORIGIN:-http://localhost:6010}"
-      Verification__Mode: LlmVerifier
+      Verification__Mode: Auto
       Verification__ConfidenceThreshold: "0.5"
+      Verification__AutoEscalateThreshold: "0.7"
       Agent__MaxIterations: "10"
       Agent__LlmStreamIdleTimeoutSeconds: "${AGENT_LLM_STREAM_IDLE_TIMEOUT_SECONDS:-300}"
       Agent__LlmTimeoutSeconds: "${AGENT_LLM_TIMEOUT_SECONDS:-300}"
