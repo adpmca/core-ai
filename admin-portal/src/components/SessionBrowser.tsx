@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { api } from "../api";
 import type { SessionSummary, PagedResult, SessionListParams } from "../api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,9 +9,10 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Trash2, MessageSquare } from "lucide-react";
 
 export default function SessionBrowser() {
+  const navigate = useNavigate();
   const [result, setResult] = useState<PagedResult<SessionSummary> | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -38,6 +39,15 @@ export default function SessionBrowser() {
 
   const setPage = (page: number) =>
     setParams(prev => ({ ...prev, page }));
+
+  const handleContinue = async (sessionId: string) => {
+    try {
+      const res = await api.continueSession(sessionId);
+      navigate(`/agents/${res.agentId}/chat?sessionId=${encodeURIComponent(res.sessionId)}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
 
   const handlePurge = async () => {
     setPurging(true);
@@ -179,12 +189,13 @@ export default function SessionBrowser() {
                 <TableHead className="text-right">Tokens In</TableHead>
                 <TableHead className="text-right">Tokens Out</TableHead>
                 <TableHead>Created</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {result?.items.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={10} className="text-center text-muted-foreground py-8">
                     No sessions found
                   </TableCell>
                 </TableRow>
@@ -211,6 +222,13 @@ export default function SessionBrowser() {
                   <TableCell className="text-right text-muted-foreground text-sm">{fmtNum(s.totalInputTokens)}</TableCell>
                   <TableCell className="text-right text-muted-foreground text-sm">{fmtNum(s.totalOutputTokens)}</TableCell>
                   <TableCell className="text-muted-foreground text-xs">{fmtDate(s.createdAt)}</TableCell>
+                  <TableCell className="text-right">
+                    <Button variant="ghost" size="sm" className="gap-1 text-emerald-600 hover:text-emerald-700"
+                      title="Continue this session in Agent Test"
+                      onClick={() => handleContinue(s.sessionId)}>
+                      <MessageSquare className="size-3.5" /> Continue
+                    </Button>
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

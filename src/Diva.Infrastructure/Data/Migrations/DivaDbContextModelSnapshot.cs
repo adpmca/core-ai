@@ -148,6 +148,43 @@ namespace Diva.Infrastructure.Data.Migrations
                     b.ToTable("AgentDefinitions");
                 });
 
+            modelBuilder.Entity("Diva.Infrastructure.Data.Entities.AgentGroupEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AgentIdsJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AllowedRolesJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AllowedUserIdsJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TenantId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId");
+
+                    b.ToTable("AgentGroups");
+                });
+
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.AgentOptimizationConfigEntity", b =>
                 {
                     b.Property<int>("Id")
@@ -820,9 +857,6 @@ namespace Diva.Infrastructure.Data.Migrations
                     b.Property<string>("Description")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("FailureKeywords")
-                        .HasColumnType("TEXT");
-
                     b.Property<int>("GroupId")
                         .HasColumnType("INTEGER");
 
@@ -865,6 +899,10 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.Property<DateTime?>("ScheduledAtUtc")
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("SuccessKeywords")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("FailureKeywords");
 
                     b.Property<string>("TimeZoneId")
                         .IsRequired()
@@ -1215,6 +1253,9 @@ namespace Diva.Infrastructure.Data.Migrations
                     b.Property<string>("AllowedAgentIdsJson")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("AllowedGroupIdsJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
 
@@ -1400,9 +1441,6 @@ namespace Diva.Infrastructure.Data.Migrations
                     b.Property<string>("Description")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("FailureKeywords")
-                        .HasColumnType("TEXT");
-
                     b.Property<bool>("IsEnabled")
                         .HasColumnType("INTEGER");
 
@@ -1445,6 +1483,10 @@ namespace Diva.Infrastructure.Data.Migrations
 
                     b.Property<DateTime?>("ScheduledAtUtc")
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("SuccessKeywords")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("FailureKeywords");
 
                     b.Property<int>("TenantId")
                         .HasColumnType("INTEGER");
@@ -1522,6 +1564,66 @@ namespace Diva.Infrastructure.Data.Migrations
                     b.HasIndex("TenantId", "CreatedAt");
 
                     b.ToTable("ScheduledTaskRuns");
+                });
+
+            modelBuilder.Entity("Diva.Infrastructure.Data.Entities.SchedulerFeedbackEntity", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Category")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CorrectionText")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReviewNotes")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ReviewedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RunId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ScheduledTaskId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("StarRating")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("SubmittedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SubmitterEmail")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SubmitterName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TaskType")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TenantId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("ThumbsRating")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RunId");
+
+                    b.HasIndex("TenantId", "Status", "SubmittedAt");
+
+                    b.ToTable("SchedulerFeedbacks");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.SiteEntity", b =>
@@ -1669,6 +1771,26 @@ namespace Diva.Infrastructure.Data.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("Tenants");
+                });
+
+            modelBuilder.Entity("Diva.Infrastructure.Data.Entities.TenantFeedbackSettingsEntity", b =>
+                {
+                    b.Property<int>("TenantId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("EnableFeedbackLinks")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("ExpiryDays")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("FeedbackLinkBaseUrl")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("TenantId");
+
+                    b.ToTable("TenantFeedbackSettings");
                 });
 
             modelBuilder.Entity("Diva.Infrastructure.Data.Entities.TenantGroupAgentOverlayEntity", b =>

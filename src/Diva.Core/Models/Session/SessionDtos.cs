@@ -127,3 +127,24 @@ public sealed class SessionTreeNode
     public bool IsCurrentSession { get; init; }
     public List<SessionTreeNode> Children { get; init; } = [];
 }
+
+// ── Continue / resume ──────────────────────────────────────────────────────
+
+/// <summary>
+/// Result of reactivating a stored session for continuation in Agent Test.
+/// The frontend uses <see cref="AgentId"/> + <see cref="SessionId"/> to open the
+/// chat route and append new turns to the same session.
+/// </summary>
+public sealed class ContinueSessionResult
+{
+    public string SessionId { get; init; } = "";
+    public string AgentId { get; init; } = "";
+    public string AgentName { get; init; } = "";
+    public int TurnCount { get; init; }
+    /// <summary>
+    /// True when the underlying conversation session was found and reactivated,
+    /// so prior context will be replayed. False means only trace metadata exists
+    /// (e.g. conversation memory expired/purged) and a fresh session will start.
+    /// </summary>
+    public bool Reactivated { get; init; }
+}

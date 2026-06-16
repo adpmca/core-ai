@@ -4,6 +4,287 @@
 
 ---
 
+## [2026-06-12] RBAC enforcement + Agent Access Groups + SSO claim mapping
+
+Three related authorization features landed together: role-based access control on admin
+endpoints, per-agent access groups, and SSO claim → role/access-group mapping with a safe
+default-user fallback.
+
+### Role-based access control (admin / user / viewer)
+
+Admin-only mutations are now guarded so a plain `user`/`viewer` cannot create, update, delete,
+or configure platform resources. Invoke endpoints remain open to all authenticated users
+(scoped per-agent by the access-group check below).
+
+| File | Change |
+|------|--------|
+| `src/Diva.Host/Auth/RequireTenantAdminAttribute.cs` | New authorization filter — 403 unless `TenantContext.IsAdmin`/`IsMasterAdmin` |
+| `src/Diva.Host/Controllers/*.cs` | `[RequireTenantAdmin]` applied to admin mutations across Admin, Agents, ApiKeys, Credentials, LearnedRules, RulePack, Scheduler, Supervisor, AgentOptimization controllers |
+| `src/Diva.Host/Controllers/AgentsController.cs` | List/Get filter agents to those the caller may invoke; create/update/delete/prompt-improve admin-gated |
+| `src/Diva.Host/Controllers/SessionsController.cs` | User-scoped sessions (`IsRestrictedUser` helper); purge admin-gated |
+| `admin-portal/src/lib/auth.ts`, `App.tsx`, `components/layout/app-sidebar.tsx`, `AgentList.tsx`, `LoginPage.tsx`, `AuthCallback.tsx` | Frontend `isAdmin()` gating: `AdminGuard` routes, `DefaultRedirect`, chat-user nav group, hidden admin actions, `is_admin` stored from login/SSO |
+
+### Agent Access Groups (per-user / per-role authorization)
+
+See [phase-28-agent-access-groups.md](phase-28-agent-access-groups.md). Group a tenant's agents
+and grant invoke access to selected users/roles. Backward compatible — agents not in any
+restricted group stay open to all tenant users.
+
+| File | Change |
+|------|--------|
+| `src/Diva.Infrastructure/Data/Entities/AgentGroupEntity.cs` | New entity (`ITenantEntity`) — name, agent IDs, allowed user IDs/roles |
+| `src/Diva.Infrastructure/Data/Migrations/20260612181544_AddAgentGroups*.cs` | EF migration (+ Designer + snapshot) |
+| `src/Diva.TenantAdmin/Services/AgentGroupService.cs`, `IAgentGroupService.cs` | `CanInvokeAgentAsync`/`GetDeniedAgentIdsAsync`/`IsGranted`, 5-min `IMemoryCache` per-tenant map |
+| `src/Diva.Host/Controllers/AgentGroupsController.cs` | CRUD REST API |
+| `src/Diva.Host/Controllers/AgentsController.cs` | Invoke + InvokeStream call `CanInvokeAgentAsync` → 403 on denial |
+| `admin-portal/src/components/AgentGroups.tsx` | Admin UI |
+| `tests/Diva.TenantAdmin.Tests/AgentGroupServiceTests.cs` | Service tests |
+
+### SSO claim mapping (RoleMap / AccessGroupMap) + default-user fallback
+
+SSO providers rarely emit Diva's internal role names. A per-tenant mapping layer translates raw
+IdP role/group values into canonical Diva roles and access-group IDs. A user with no mapped
+roles defaults to the `user` role and (with no resolved access groups) can only invoke agents
+that are not group-restricted.
+
+| File | Change |
+|------|--------|
+| `src/Diva.Core/Configuration/OAuthOptions.cs` | `ClaimMappingsOptions` gains `Groups`, `GroupAccess`, `RoleMap` (`Dictionary<string,string>`), `AccessGroupMap` (`Dictionary<string,string[]>`) |
+| `src/Diva.Infrastructure/Auth/SsoClaimMapper.cs` | New helper — role normalization (when `UseRoleMappings` on), access-group resolution, dedupe, default `user` fallback |
+| `src/Diva.Host/Controllers/AuthController.cs` | Callback extracts `agent_access`/`group_access`, runs `SsoClaimMapper.Map`, passes results to `IssueSsoJwt` |
+| `src/Diva.Infrastructure/Auth/LocalAuthService.cs` | `IssueSsoJwt` emits `agent_access`/`group_access` claims |
+| `src/Diva.Infrastructure/Auth/TenantClaimsExtractor.cs` | Reads `group_access` claim into `TenantContext.GroupAccess` |
+| `admin-portal/src/components/SsoConfigEditor.tsx` | Structured Role Mapping + Access Group Mapping row editors (merge into `claimMappingsJson`) |
+| `tests/Diva.TenantAdmin.Tests/SsoClaimMapperTests.cs`, `TenantClaimsExtractorGroupTests.cs` | Mapper + fallback + claim-extraction tests |
+
+---
+
+## [2026-06-11] Verification Auto-mode escalation + token-cost optimisations
+
+### Auto mode now escalates low-confidence responses to an LLM cross-check
+
+Previously `Auto` always terminated in the cheap `ToolGrounded` heuristic and never made a second LLM call, so action/delivery claims (e.g. "email sent", "CC'd", "delivered", "rendered") were trusted at a flat confidence even though tool *data* evidence could not prove them — the same false-positive class seen in Strict mode. `ToolGroundedCheck` now returns **variable confidence**, and `Auto` escalates to a non-blocking LLM verifier only when confidence falls below a configurable threshold and evidence exists. The common case (plain tool-grounded data) stays zero-cost.
+
+| File | Change |
+|------|--------|
+| `src/Diva.Core/Configuration/VerificationOptions.cs` | Added `AutoEscalateThreshold` (default `0.7`; `0` disables escalation) |
+| `src/Diva.Infrastructure/Verification/ResponseVerifier.cs` | New `ActionClaimPattern` regex; `ToolGroundedCheck` lowers confidence to `0.6` on action/delivery claims; `AutoVerifyAsync` rewritten to run heuristic first, then escalate to a non-blocking `LlmVerifier` (relabelled `Mode="Auto"`) below threshold when evidence is present |
+| `src/Diva.Host/appsettings.json` | Added `Verification:AutoEscalateThreshold: 0.7` |
+| `docker-compose.yml` | Dev stack `Verification__Mode` switched `LlmVerifier` → `Auto`; added `Verification__AutoEscalateThreshold: "0.7"` |
+| `tests/Diva.Agents.Tests/ResponseVerifierTests.cs` | +4 tests: action-claim confidence drop, plain-data baseline, escalation with evidence, no-escalation without evidence, escalation disabled (14 total, all green) |
+| `docs/arch-response-verification.md` | Updated Auto decision tree, per-agent table, and config example |
+
+### Context-window token-cost optimisations
+
+| File | Change |
+|------|--------|
+| `src/Diva.Core/Configuration/AgentOptions.cs` | Added `ContextWindow:SummarizerMaxTokens` (default 512) |
+| `src/Diva.Infrastructure/Context/ContextWindowManager.cs` | Point B summariser max tokens now configurable via `SummarizerMaxTokens` (was hardcoded 512) for both Anthropic and OpenAI strategies |
+| `src/Diva.TenantAdmin/Prompts/TenantAwarePromptBuilder.cs` | Few-shot examples (Phase 24) moved from the per-session dynamic block to the static (cached) block — they are stable per agent+tenant, so this maximises the Anthropic BP1 prompt-cache hit rate |
+
+---
+
+## [2026-06-10] ADR-13683 — AI Session & Context Management gaps resolved
+
+Closes the three critical gaps identified against ADR-13683 (_Implement AI Session & Context Management Framework_).
+
+### GAP 2 — Supervisor conversation history forwarded to Worker Agents
+
+Previously `DispatchStage` created worker `AgentRequest`s with no session context; workers started blind even when the user had already provided parameters (date, party size, site) to the supervisor.
+
+| File | Change |
+|------|--------|
+| `src/Diva.Core/Models/AgentRequest.cs` | Added optional `ConversationContext` property — condensed supervisor history injected by `DispatchStage` |
+| `src/Diva.Agents/Supervisor/Stages/DispatchStage.cs` | Populates `ConversationContext` from `state.SessionHistory` (last 10 messages) via new `BuildConversationContext()` helper |
+| `src/Diva.Infrastructure/LiteLLM/AnthropicAgentRunner.cs` | Injects `ConversationContext` into the worker system prompt (respects Anthropic cache split — goes into the volatile dynamic block) |
+
+### GAP 4 (security) — SessionsController IDOR fixed
+
+Non-master users could read or delete another tenant's session data via direct ID on five endpoints.
+
+| File | Change |
+|------|--------|
+| `src/Diva.Host/Controllers/SessionsController.cs` | Added `effectiveTenantId` ownership check to `GetSession`, `GetTurnIterations`, `GetSessionTree`, `ExportSession`, and `DeleteSession` — same pattern already used by list and continue endpoints |
+
+### GAP 1 — Session expiry now enforced at runtime
+
+`ExpiresAt` was modelled but never enforced — active-session lookup ignored it, and no background worker marked sessions expired.
+
+| File | Change |
+|------|--------|
+| `src/Diva.Infrastructure/Sessions/AgentSessionService.cs` | `GetOrCreateAsync` now filters by `s.ExpiresAt > now` in addition to `Status == "active"` |
+| `src/Diva.Infrastructure/Sessions/SessionCleanupService.cs` | **New** — `BackgroundService` that marks active sessions with past `ExpiresAt` as `"expired"` and hard-deletes sessions inactive for `HardDeleteAfterDays` (default 90); runs every `IntervalHours` (default 6) |
+| `src/Diva.Host/Program.cs` | Registers `SessionCleanupService` and binds `SessionCleanupOptions` from `Sessions` config section |
+| `src/Diva.Host/appsettings.json` | Added `Sessions` config section: `CleanupEnabled: true`, `IntervalHours: 6`, `HardDeleteAfterDays: 90` |
+
+### Backward compatibility
+
+All changes are additive or narrowly scoped. No DB migrations needed. No agent reconfiguration required. Workers that receive `null` for `ConversationContext` behave exactly as before.
+
+---
+
+## [2026-06-02] Platform Administrators management
+
+Multiple platform admins can now be created and managed from the admin portal.
+Previously only a single master admin existed (created during first-time setup).
+
+### New files
+
+| File | Purpose |
+|------|---------|
+| `admin-portal/src/components/PlatformAdminsPage.tsx` | Platform admin management page — wraps `LocalUsersPanel` scoped to `tenantId=0` with `master_admin` role only |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `src/Diva.Host/Controllers/AuthController.cs` | `DeleteLocalUser`: guard prevents deleting the last active platform admin (returns `400`) |
+| `admin-portal/src/components/LocalUsersPanel.tsx` | Added `availableRoles` and `defaultRoles` props (backward-compatible; existing tenant usage unchanged) |
+| `admin-portal/src/App.tsx` | Route `/platform/admins` added |
+| `admin-portal/src/components/layout/app-sidebar.tsx` | "Admins" nav item added to Platform Admin group (`ShieldAlert` icon) |
+
+### Behaviour
+
+- Master admin navigates to **Platform Admin → Admins**
+- **Add User** creates a new `TenantId=0` user with role `master_admin` via the existing `POST /api/auth/local-users?tenantId=0` endpoint
+- New platform admins appear on the **Platform administrator? Sign in here** login form and have full access to all tenants and settings
+- Deleting is blocked if it would leave zero active platform admins
+
+---
+
+## [2026-06-02] Bug fixes — session_id template variable, logout redirect, reverse-proxy deployment, change password & feedback page branding
+
+Five independent fixes and one new feature shipped together.
+
+### 1. `{{session_id}}` template variable resolved blank
+
+`TenantContext.SessionId` was null at prompt-build time because the session was created *after*
+`TenantAwarePromptBuilder` ran. Fixed by enriching `TenantContext` with the resolved session ID
+immediately after `GetOrCreateAsync` returns.
+
+| File | Change |
+|------|--------|
+| `src/Diva.Core/Models/TenantContext.cs` | Added `WithSession(string? sessionId)` helper — copies all properties and sets `SessionId` |
+| `src/Diva.Infrastructure/LiteLLM/AnthropicAgentRunner.cs` | `tenant = tenant.WithSession(sessionId)` after `GetOrCreateAsync` |
+| `src/Diva.TenantAdmin/Prompts/TenantAwarePromptBuilder.cs` | `BuildRuntimeVariables` includes `["session_id"] = tenant.SessionId ?? ""` |
+| `admin-portal/src/components/AgentBuilder.tsx` | Added `session_id` to the `PROMPT_VARIABLES` help list |
+
+### 2. Prompt Quick Fix — wrong prompt text sent to LLM
+
+`POST /api/agents/{id}/prompt/improve` was ignoring the in-editor prompt and loading
+`agent.SystemPrompt` from the DB. Fixed by adding an optional `CurrentPrompt` field to the
+request body which takes precedence when supplied.
+
+| File | Change |
+|------|--------|
+| `src/Diva.Host/Controllers/AuthController.cs` | `ImprovePromptRequest` record: added optional `CurrentPrompt` field with `[JsonPropertyName("currentPrompt")]` |
+| `src/Diva.Host/Controllers/AgentsController.cs` | Uses `req.CurrentPrompt ?? agent.SystemPrompt` |
+| `admin-portal/src/components/PromptQuickFixDialog.tsx` | Generalised: removed `agentId` prop; added `onImprove: (instruction) => Promise<string>` callback + `currentPrompt` prop |
+| `admin-portal/src/components/AgentBuilder.tsx` | Passes `onImprove` callback with live `form.systemPrompt` |
+| `admin-portal/src/components/ScheduledTasks.tsx` | Added Quick Fix button + `PromptQuickFixDialog` to the Task dialog form |
+| `admin-portal/src/api.ts` | `improvePrompt()` accepts optional `currentPrompt` arg |
+
+### 3. Reverse-proxy / subpath deployment (`VITE_BASE_PATH`)
+
+The portal is served at `https://proxy-internal.totaleintegrated.com/beta/tei-ai/` via a corporate
+reverse proxy. Static assets and API calls were using wrong base URLs.
+
+| File | Change |
+|------|--------|
+| `admin-portal/vite.config.ts` | Reads `VITE_BASE_PATH` env var at build time; sets Vite `base`; all output under `/assets/` |
+| `admin-portal/src/App.tsx` | `BrowserRouter` uses `basename={import.meta.env.BASE_URL}` |
+| `admin-portal/src/api.ts` | `BASE` uses `import.meta.env.VITE_API_URL ?? import.meta.env.BASE_URL.replace(/\/$/, '')` |
+| `admin-portal/src/lib/auth.ts` | Same `API_BASE` pattern |
+| `admin-portal/src/components/LoginPage.tsx` | Same `API_BASE` pattern (was last remaining `localhost:5062` hardcode) |
+| `admin-portal/src/components/WidgetManager.tsx` | Same `BASE_URL` pattern |
+| `admin-portal/nginx.conf` | Added `listen 80;` (reverse proxies default to port 80) |
+| `admin-portal/Dockerfile` | `VITE_BASE_PATH` ARG passed to `npx vite build` |
+| `docker-compose.yml` | `VITE_BASE_PATH` build-arg + comma-separated `PORTAL_ORIGIN` comment |
+| `.env` | `VITE_BASE_PATH=/beta/tei-ai` |
+| `src/Diva.Host/Program.cs` | CORS `CorsOrigin` split on `,` to support multiple allowed origins |
+
+### 4. Logout redirect producing malformed URL
+
+`AdminPortal:CorsOrigin` is a comma-separated list for multi-origin support. `_portalOrigin` was
+used verbatim, producing broken redirect URLs like
+`https://proxy.../beta/tei-ai,http://localhost:6010/login`.
+
+| File | Change |
+|------|--------|
+| `src/Diva.Host/Controllers/AuthController.cs` | `_portalOrigin` now takes `Split(',')[0]` — first origin only for redirect URLs |
+| `admin-portal/src/lib/auth.ts` | Non-SSO logout fallback changed from `"/login"` to `` `${import.meta.env.BASE_URL}login` `` so subpath deployments redirect correctly |
+
+### 5. Change password for local-auth users
+
+Self-service password change for users who log in with a local username/password account (not SSO).
+Admin users can also change their own master-admin password via the same endpoint.
+
+| File | Change |
+|------|--------|
+| `src/Diva.Infrastructure/Auth/LocalAuthService.cs` | Added `ChangePasswordAsync` to `ILocalAuthService` interface and implementation — verifies current password (PBKDF2-SHA256) before updating hash |
+| `src/Diva.Host/Controllers/AuthController.cs` | `ChangePasswordRequest` record; `POST /api/auth/change-password` endpoint — validates `int.TryParse(userId)` to reject SSO users; min 8-char validation |
+| `admin-portal/src/api.ts` | `changePassword(currentPassword, newPassword)` method |
+| `admin-portal/src/components/ChangePasswordDialog.tsx` | **New file** — dialog with current / new / confirm fields; client-side match + min-length validation; `toast.success` on success |
+| `admin-portal/src/components/layout/topbar.tsx` | `KeyRound` icon button — shown **only** for local-auth users (numeric `userId`); wires `ChangePasswordDialog` |
+
+### 6. Scheduler Feedback Page — branded header/footer
+
+The public feedback form (emailed link, no auth required) had no header or footer, making it
+appear unbranded.
+
+| File | Change |
+|------|--------|
+| `admin-portal/src/components/SchedulerFeedbackPage.tsx` | Added `FeedbackShell` layout component: sticky header with `Shield` icon + `APP_NAME`, footer with copyright year; all states (loading, submitted, error, form) wrapped in `FeedbackShell` |
+
+---
+
+## [2026-05-29] Scheduler — Run Feedback Collection
+
+Allows external recipients (from notification emails) to submit feedback on scheduler run results
+via a tokenised public link. Admins can review, approve, or reject submitted feedback in the portal.
+
+### Overview
+
+| Feature | Summary |
+|---------|---------|
+| **Public feedback form** | Tokenised one-time link in notification emails; shows run context; collects thumbs up/down, star rating, category, correction text, and optional submitter identity |
+| **Feedback token service** | HMAC-signed, expiry-bounded tokens; tokens are single-use (marked consumed on submit) |
+| **Admin review panel** | `/schedules/feedback` page; table of pending/reviewed feedback; approve (trigger rule suggestion) or reject; filter by status |
+| **Feedback settings** | Per-tenant opt-in/opt-out; configurable expiry days |
+
+### New files
+
+| File | Purpose |
+|------|---------|
+| `src/Diva.Infrastructure/Scheduler/ISchedulerFeedbackService.cs` | CRUD + approve/reject interface |
+| `src/Diva.Infrastructure/Scheduler/SchedulerFeedbackService.cs` | EF implementation |
+| `src/Diva.Infrastructure/Scheduler/ISchedulerFeedbackTokenService.cs` | Token generate/validate interface |
+| `src/Diva.Infrastructure/Scheduler/SchedulerFeedbackTokenService.cs` | HMAC-SHA256 signed tokens with expiry |
+| `src/Diva.Infrastructure/Data/Entities/SchedulerFeedbackEntity.cs` | `SchedulerFeedbackEntity` EF entity |
+| `src/Diva.Infrastructure/Data/Entities/TenantFeedbackSettingsEntity.cs` | Per-tenant feedback settings entity |
+| `src/Diva.Infrastructure/Data/Migrations/20260529161658_AddSchedulerFeedback.*` | EF migration — `SchedulerFeedback` table |
+| `src/Diva.Infrastructure/Data/Migrations/20260529210822_AddTenantFeedbackSettings.*` | EF migration — `TenantFeedbackSettings` table |
+| `src/Diva.Host/Controllers/SchedulerFeedbackController.cs` | Public submit + admin CRUD endpoints |
+| `admin-portal/src/components/SchedulerFeedbackPage.tsx` | Public tokenised feedback form (no auth) |
+| `admin-portal/src/components/SchedulerFeedbackReview.tsx` | Admin review table with approve/reject dialogs |
+
+### Modified files
+
+| File | Change |
+|------|--------|
+| `src/Diva.Infrastructure/Data/DivaDbContext.cs` | `SchedulerFeedback` + `TenantFeedbackSettings` DbSets; EF query filters |
+| `src/Diva.Infrastructure/Data/Migrations/DivaDbContextModelSnapshot.cs` | Updated model snapshot |
+| `src/Diva.Infrastructure/Scheduler/IScheduledTaskService.cs` | Feedback token injection point |
+| `src/Diva.Infrastructure/Scheduler/ScheduledTaskService.cs` | Generates feedback token; appended to notification email link |
+| `src/Diva.Infrastructure/Scheduler/SchedulerHostedService.cs` | Passes token to notification email on run completion |
+| `src/Diva.Core/Configuration/TaskSchedulerOptions.cs` | `FeedbackLinkBaseUrl` + `FeedbackTokenExpiryDays` options |
+| `src/Diva.Host/appsettings.json` | `TaskScheduler.FeedbackLinkBaseUrl` default |
+| `admin-portal/src/api.ts` | `SchedulerFeedbackContext`, `SchedulerFeedbackItem` interfaces; `getSchedulerFeedbackContext`, `submitSchedulerFeedback`, `listSchedulerFeedback`, `approveSchedulerFeedback`, `rejectSchedulerFeedback` methods |
+| `admin-portal/src/components/layout/app-sidebar.tsx` | Added "Schedule Feedback" nav item (`/schedules/feedback`, `Star` icon) |
+| `admin-portal/src/mocks/handlers.ts` | MSW mock handlers for feedback endpoints |
+
+---
+
 ## [2026-05-18] Scheduler — Email Notifications, Run Status Tracking & SuccessKeywords Validation
 
 Three related features shipped together: (1) HTML email notifications for scheduled task run

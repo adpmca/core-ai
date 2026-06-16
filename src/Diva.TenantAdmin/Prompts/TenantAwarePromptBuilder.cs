@@ -40,12 +40,12 @@ public sealed class TenantAwarePromptBuilder : IPromptBuilder
         IOptions<AgentOptions> opts,
         ILogger<TenantAwarePromptBuilder> logger)
     {
-        _rules        = rules;
+        _rules = rules;
         _sessionRules = sessionRules;
         _groupService = groupService;
         _optimization = optimization;
-        _opts         = opts.Value;
-        _logger       = logger;
+        _opts = opts.Value;
+        _logger = logger;
     }
 
     public async Task<string> BuildAsync(
@@ -62,9 +62,9 @@ public sealed class TenantAwarePromptBuilder : IPromptBuilder
         // NOTE: Tenant business rules are intentionally excluded here — they now flow through
         // TenantRulePackHook via RulePackEngine (BusinessRuleAdapter + virtual pack).
         var tenantOverridesTask = _rules.GetPromptOverridesAsync(tenant.TenantId, agentType, ct, agentId);
-        var groupRulesTask     = _groupService.GetActiveRulesForTenantAsync(tenant.TenantId, agentType, ct);
+        var groupRulesTask = _groupService.GetActiveRulesForTenantAsync(tenant.TenantId, agentType, ct);
         var groupOverridesTask = _groupService.GetActiveOverridesForTenantAsync(tenant.TenantId, agentType, ct);
-        var sessionRulesTask   = tenant.SessionId is not null
+        var sessionRulesTask = tenant.SessionId is not null
             ? _sessionRules.GetSessionRulesAsync(tenant.SessionId, ct)
             : Task.FromResult(new List<SuggestedRule>());
 
@@ -107,7 +107,7 @@ public sealed class TenantAwarePromptBuilder : IPromptBuilder
             try
             {
                 var examples = await _optimization.GetFewShotExamplesAsync(agentId, tenant.TenantId, ct);
-                var enabled  = examples.Where(e => e.IsEnabled).OrderBy(e => e.SortOrder)
+                var enabled = examples.Where(e => e.IsEnabled).OrderBy(e => e.SortOrder)
                                        .Take(_opts.Optimization.MaxFewShotExamplesPerAgent)
                                        .ToList();
                 if (enabled.Count > 0)
@@ -132,7 +132,7 @@ public sealed class TenantAwarePromptBuilder : IPromptBuilder
 
         // Resolve {{variable}} placeholders in the fully-assembled prompt.
         // Precedence: customVars (admin-defined) > runtimeVars (per-request identity) > built-ins (date/time)
-        var customVars  = PromptVariableResolver.ParseJson(customVariablesJson, _logger);
+        var customVars = PromptVariableResolver.ParseJson(customVariablesJson, _logger);
         var runtimeVars = BuildRuntimeVariables(tenant);
         result = PromptVariableResolver.Resolve(result, customVars, runtimeVars, _logger);
 
@@ -155,9 +155,9 @@ public sealed class TenantAwarePromptBuilder : IPromptBuilder
     {
         // Fetch all sources in parallel (same as BuildAsync)
         var tenantOverridesTask = _rules.GetPromptOverridesAsync(tenant.TenantId, agentType, ct, agentId);
-        var groupRulesTask      = _groupService.GetActiveRulesForTenantAsync(tenant.TenantId, agentType, ct);
-        var groupOverridesTask  = _groupService.GetActiveOverridesForTenantAsync(tenant.TenantId, agentType, ct);
-        var sessionRulesTask    = tenant.SessionId is not null
+        var groupRulesTask = _groupService.GetActiveRulesForTenantAsync(tenant.TenantId, agentType, ct);
+        var groupOverridesTask = _groupService.GetActiveOverridesForTenantAsync(tenant.TenantId, agentType, ct);
+        var sessionRulesTask = tenant.SessionId is not null
             ? _sessionRules.GetSessionRulesAsync(tenant.SessionId, ct)
             : Task.FromResult(new List<SuggestedRule>());
 
@@ -179,28 +179,15 @@ public sealed class TenantAwarePromptBuilder : IPromptBuilder
             staticParts.Add("## Group Rules\n\n" +
                 string.Join("\n", groupRules.Select(r => $"- {r.PromptInjection}")));
 
-        var staticResult = string.Join("\n\n", staticParts);
-        var customVars   = PromptVariableResolver.ParseJson(customVariablesJson, _logger);
-        var runtimeVars  = BuildRuntimeVariables(tenant);
-        staticResult     = PromptVariableResolver.Resolve(staticResult, customVars, runtimeVars, _logger);
-
-        // ── Dynamic part (changes per session) ────────────────────────────────────────────
-        var sessionRuleList = sessionRulesTask.Result;
-        var dynamicParts    = new List<string>();
-
-        if (sessionRuleList.Count > 0)
-            dynamicParts.Add(PromptVariableResolver.Resolve(
-                "## Session Rules\n\n" +
-                string.Join("\n", sessionRuleList.Select(r => $"- {r.PromptInjection}")),
-                customVars, runtimeVars, _logger));
-
-        // Few-shot examples (Phase 24) — injected in dynamic part (per-agent, not per-session)
+        // Few-shot examples (Phase 24) — per-agent (not per-session), so they belong in the
+        // STATIC (cached) block to maximise the Anthropic BP1 cache hit rate. They are stable
+        // across turns for a given agent+tenant.
         if (agentId is not null)
         {
             try
             {
                 var examples = await _optimization.GetFewShotExamplesAsync(agentId, tenant.TenantId, ct);
-                var enabled  = examples.Where(e => e.IsEnabled).OrderBy(e => e.SortOrder)
+                var enabled = examples.Where(e => e.IsEnabled).OrderBy(e => e.SortOrder)
                                        .Take(_opts.Optimization.MaxFewShotExamplesPerAgent)
                                        .ToList();
                 if (enabled.Count > 0)
@@ -212,7 +199,7 @@ public sealed class TenantAwarePromptBuilder : IPromptBuilder
                         sb.AppendLine($"Assistant: {ex.AssistantMessage}");
                         sb.AppendLine();
                     }
-                    dynamicParts.Add(sb.ToString().TrimEnd());
+                    staticParts.Add(sb.ToString().TrimEnd());
                 }
             }
             catch (Exception ex)
@@ -220,6 +207,21 @@ public sealed class TenantAwarePromptBuilder : IPromptBuilder
                 _logger.LogWarning(ex, "Failed to load few-shot examples for agent {AgentId}", agentId);
             }
         }
+
+        var staticResult = string.Join("\n\n", staticParts);
+        var customVars = PromptVariableResolver.ParseJson(customVariablesJson, _logger);
+        var runtimeVars = BuildRuntimeVariables(tenant);
+        staticResult = PromptVariableResolver.Resolve(staticResult, customVars, runtimeVars, _logger);
+
+        // ── Dynamic part (changes per session) ────────────────────────────────────────────
+        var sessionRuleList = sessionRulesTask.Result;
+        var dynamicParts = new List<string>();
+
+        if (sessionRuleList.Count > 0)
+            dynamicParts.Add(PromptVariableResolver.Resolve(
+                "## Session Rules\n\n" +
+                string.Join("\n", sessionRuleList.Select(r => $"- {r.PromptInjection}")),
+                customVars, runtimeVars, _logger));
 
         var dynamicResult = dynamicParts.Count > 0 ? string.Join("\n\n", dynamicParts) : string.Empty;
 
@@ -239,11 +241,12 @@ public sealed class TenantAwarePromptBuilder : IPromptBuilder
     private static IReadOnlyDictionary<string, string> BuildRuntimeVariables(TenantContext tenant)
         => new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["user_id"]     = tenant.UserId,
-            ["user_email"]  = tenant.UserEmail,
-            ["user_name"]   = tenant.UserName,
-            ["tenant_id"]   = tenant.TenantId.ToString(),
+            ["user_id"] = tenant.UserId,
+            ["user_email"] = tenant.UserEmail,
+            ["user_name"] = tenant.UserName,
+            ["tenant_id"] = tenant.TenantId.ToString(),
             ["tenant_name"] = tenant.TenantName,
+            ["session_id"] = tenant.SessionId ?? "",
         };
 
     private static string ApplyGroupOverrides(string prompt, List<GroupPromptOverrideEntity> overrides)
@@ -254,7 +257,7 @@ public sealed class TenantAwarePromptBuilder : IPromptBuilder
             {
                 "Replace" => o.CustomText,
                 "Prepend" => o.CustomText + "\n\n" + prompt,
-                _         => prompt + "\n\n" + o.CustomText,   // "Append" (default)
+                _ => prompt + "\n\n" + o.CustomText,   // "Append" (default)
             };
         }
         return prompt;
@@ -268,7 +271,7 @@ public sealed class TenantAwarePromptBuilder : IPromptBuilder
             {
                 "Replace" => o.CustomText,
                 "Prepend" => o.CustomText + "\n\n" + prompt,
-                _         => prompt + "\n\n" + o.CustomText,   // "Append" (default)
+                _ => prompt + "\n\n" + o.CustomText,   // "Append" (default)
             };
         }
         return prompt;

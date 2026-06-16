@@ -222,6 +222,9 @@ public sealed class AnthropicAgentRunner : IAgentRunner
         var (sessionId, history) = await _sessions.GetOrCreateAsync(
             request.SessionId, definition.Id, tenant, ct);
 
+        // Enrich tenant context with the resolved session ID so {{session_id}} resolves correctly.
+        tenant = tenant.WithSession(sessionId);
+
         // ── Session trace setup (separate sessions-trace.db) ─────────────────
         await using var traceScope = _scopeFactory?.CreateAsyncScope();
         var traceWriter = traceScope?.ServiceProvider.GetService<SessionTraceWriter>();
@@ -275,6 +278,17 @@ public sealed class AnthropicAgentRunner : IAgentRunner
             else
                 staticSystemPrompt += instructions;
             systemPrompt += instructions;
+        }
+
+        // ── Supervisor conversation context (delegated worker requests only) ────
+        if (!string.IsNullOrWhiteSpace(request.ConversationContext))
+        {
+            var ctxBlock = $"\n\n{request.ConversationContext}";
+            if (useAnthropicEarly && enableHistoryCaching)
+                dynamicSystemPrompt += ctxBlock;   // volatile: changes per turn
+            else
+                staticSystemPrompt += ctxBlock;
+            systemPrompt += ctxBlock;
         }
 
         // ── Resolve LLM config (platform → group → tenant → per-agent) ────────────

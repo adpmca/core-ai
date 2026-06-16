@@ -15,9 +15,14 @@ namespace Diva.Infrastructure.Verification;
 ///
 /// Modes:
 ///   Off           — no check, always returns IsVerified=true
-///   ToolGrounded  — heuristic: flags factual claims if no tools were called (zero LLM cost)
+///   ToolGrounded  — heuristic: flags factual claims if no tools were called (zero LLM cost).
+///                   Confidence is variable: lowered when the response makes action/delivery claims
+///                   (e.g. "email sent", "CC'd") that tool DATA evidence cannot directly prove.
 ///   LlmVerifier   — second-pass LLM call that cross-checks claims against tool evidence
 ///   Strict        — same as LlmVerifier but blocks the response if confidence is below threshold
+///   Auto          — runs the cheap ToolGrounded heuristic first; only escalates to a (non-blocking)
+///                   LLM cross-check when heuristic confidence is below AutoEscalateThreshold and
+///                   tool evidence is available. Keeps the common case zero-cost.
 /// </summary>
 public sealed class ResponseVerifier
 {
@@ -32,6 +37,13 @@ public sealed class ResponseVerifier
         new(@"[\$\£\€]?\d[\d,\.]*\s*(%|transactions?|units?|pts?|points?|\b)?",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // Matches action/delivery/meta claims whose truth lives in a downstream tool's self-reported
+    // success rather than in returned DATA — these are the classic Strict-mode false positives
+    // (e.g. "email delivered", "Sent At ...", "CC'd", "rendered correctly").
+    private static readonly Regex ActionClaimPattern =
+        new(@"\b(sent|delivered|e-?mailed|mailed|dispatched|submitted|cc'?(d|ed)?|bcc'?(d|ed)?|notified|scheduled|created|posted|uploaded|saved|rendered|forwarded)\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
     public ResponseVerifier(
         IOptions<VerificationOptions> opts,
         IOptions<LlmOptions> llm,
@@ -39,11 +51,11 @@ public sealed class ResponseVerifier
         IOpenAiProvider openAi,
         ILogger<ResponseVerifier> logger)
     {
-        _opts      = opts.Value;
-        _llm       = llm.Value;
+        _opts = opts.Value;
+        _llm = llm.Value;
         _anthropic = anthropic;
-        _openAi    = openAi;
-        _logger    = logger;
+        _openAi = openAi;
+        _logger = logger;
     }
 
     public async Task<VerificationResult> VerifyAsync(
@@ -62,12 +74,12 @@ public sealed class ResponseVerifier
 
         return effectiveMode switch
         {
-            "Off"          => Skipped(),
+            "Off" => Skipped(),
             "ToolGrounded" => ToolGroundedCheck(responseText, toolsUsed),
-            "LlmVerifier"  => await LlmVerifyAsync(responseText, toolEvidence, block: false, ct, modelId),
-            "Strict"       => await LlmVerifyAsync(responseText, toolEvidence, block: true, ct, modelId),
-            "Auto"         => await AutoVerifyAsync(responseText, toolsUsed, toolEvidence, ct, modelId),
-            _              => Skipped()
+            "LlmVerifier" => await LlmVerifyAsync(responseText, toolEvidence, block: false, ct, modelId),
+            "Strict" => await LlmVerifyAsync(responseText, toolEvidence, block: true, ct, modelId),
+            "Auto" => await AutoVerifyAsync(responseText, toolsUsed, toolEvidence, ct, modelId),
+            _ => Skipped()
         };
     }
 
@@ -82,21 +94,40 @@ public sealed class ResponseVerifier
         if (string.IsNullOrWhiteSpace(responseText) || responseText.Length < 80)
             return Skipped();
 
-        // Tools were called AND produced evidence → trust the grounding heuristic (zero extra LLM cost).
-        // Set Mode=LlmVerifier or Mode=Strict explicitly to enable cross-checking of claims vs evidence.
-        if (toolsUsed.Count > 0 && !string.IsNullOrWhiteSpace(toolEvidence))
-            return ToolGroundedCheck(responseText, toolsUsed);
+        // No tools and no factual content — purely conversational, skip entirely (zero cost).
+        if (toolsUsed.Count == 0 && !ContainsFactualClaims(responseText))
+            return Skipped();
 
-        // Tools were called but produced no evidence (unusual) → cheap heuristic
-        if (toolsUsed.Count > 0)
-            return ToolGroundedCheck(responseText, toolsUsed);
+        // Run the cheap heuristic first. Its confidence is variable: high for plain
+        // tool-grounded data, lower when the response makes action/delivery claims.
+        var heuristic = ToolGroundedCheck(responseText, toolsUsed);
 
-        // No tools: flag only if response looks like it contains factual data
-        if (ContainsFactualClaims(responseText))
-            return ToolGroundedCheck(responseText, toolsUsed);
+        // Confident enough → accept the heuristic verdict at zero extra LLM cost.
+        if (heuristic.Confidence >= _opts.AutoEscalateThreshold)
+            return heuristic;
 
-        // Purely conversational — skip verification entirely
-        return Skipped();
+        // Low confidence — escalate to a real LLM cross-check, but only if there is evidence
+        // to check against. Without evidence the LLM can do no better than the heuristic.
+        if (_opts.AutoEscalateThreshold > 0f && !string.IsNullOrWhiteSpace(toolEvidence))
+        {
+            _logger.LogInformation(
+                "Auto mode escalating to LLM verifier (heuristic confidence={Conf:F2} < threshold={Thr:F2})",
+                heuristic.Confidence, _opts.AutoEscalateThreshold);
+
+            var llm = await LlmVerifyAsync(responseText, toolEvidence, block: false, ct, modelId);
+            return new VerificationResult
+            {
+                IsVerified = llm.IsVerified,
+                Confidence = llm.Confidence,
+                Mode = "Auto",
+                UngroundedClaims = llm.UngroundedClaims,
+                WasBlocked = llm.WasBlocked,
+                Reasoning = llm.Reasoning,
+            };
+        }
+
+        // No evidence to escalate against — return the heuristic verdict as-is.
+        return heuristic;
     }
 
     // ── Modes ─────────────────────────────────────────────────────────────────
@@ -112,20 +143,33 @@ public sealed class ResponseVerifier
             _logger.LogWarning("Unverified response: factual claims present but no tools were called");
             return new VerificationResult
             {
-                IsVerified       = false,
-                Confidence       = 0.4f,
-                Mode             = "ToolGrounded",
+                IsVerified = false,
+                Confidence = 0.4f,
+                Mode = "ToolGrounded",
                 UngroundedClaims = ["Response contains factual claims but no tools were called to support them"],
-                Reasoning        = "No tool evidence available to verify factual assertions"
+                Reasoning = "No tool evidence available to verify factual assertions"
             };
         }
 
-        // Tools were called — we trust the grounding at this level
+        // No tools and no factual content — nothing to ground, treat as safe.
+        if (toolsUsed.Count == 0)
+            return new VerificationResult { IsVerified = true, Confidence = 0.95f, Mode = "ToolGrounded" };
+
+        // Tools were called. Default trust is high, but action/delivery claims (e.g. "email sent",
+        // "CC'd", "rendered") cannot be confirmed by tool DATA evidence — lower the confidence so
+        // Auto mode escalates to an LLM cross-check instead of silently trusting the claim.
+        var confidence = 0.85f;
+        if (ActionClaimPattern.IsMatch(response))
+        {
+            confidence = 0.6f;
+            _logger.LogDebug("ToolGrounded: action/delivery claim detected — lowering confidence to {Conf:F2}", confidence);
+        }
+
         return new VerificationResult
         {
             IsVerified = true,
-            Confidence = toolsUsed.Count > 0 ? 0.85f : 0.95f,
-            Mode       = "ToolGrounded"
+            Confidence = confidence,
+            Mode = "ToolGrounded"
         };
     }
 
@@ -138,7 +182,7 @@ public sealed class ResponseVerifier
 
         try
         {
-            var raw    = await CallLlmAsync(response, evidence, ct, modelId);
+            var raw = await CallLlmAsync(response, evidence, ct, modelId);
             var parsed = ParseVerifierResponse(raw);
 
             var shouldBlock = block && parsed.Confidence < _opts.ConfidenceThreshold;
@@ -148,12 +192,12 @@ public sealed class ResponseVerifier
 
             return new VerificationResult
             {
-                IsVerified       = parsed.IsVerified,
-                Confidence       = parsed.Confidence,
-                Mode             = block ? "Strict" : "LlmVerifier",
+                IsVerified = parsed.IsVerified,
+                Confidence = parsed.Confidence,
+                Mode = block ? "Strict" : "LlmVerifier",
                 UngroundedClaims = parsed.UngroundedClaims,
-                WasBlocked       = shouldBlock,
-                Reasoning        = _opts.IncludeReasoningInResponse ? parsed.Reasoning : null
+                WasBlocked = shouldBlock,
+                Reasoning = _opts.IncludeReasoningInResponse ? parsed.Reasoning : null
             };
         }
         catch (Exception ex)
@@ -168,8 +212,8 @@ public sealed class ResponseVerifier
                 IsVerified = !block,
                 WasBlocked = block,
                 Confidence = 0.5f,
-                Mode       = block ? "Strict" : "LlmVerifier",
-                Reasoning  = block ? "Verification service unavailable — response blocked in Strict mode" : null,
+                Mode = block ? "Strict" : "LlmVerifier",
+                Reasoning = block ? "Verification service unavailable — response blocked in Strict mode" : null,
             };
         }
     }
@@ -178,10 +222,10 @@ public sealed class ResponseVerifier
 
     private async Task<string> CallLlmAsync(string response, string evidence, CancellationToken ct, string? modelId = null)
     {
-        var prompt = BuildPrompt(response, evidence);
-        var opts   = _llm.DirectProvider;
-        var model  = !string.IsNullOrWhiteSpace(_opts.VerifierModel) ? _opts.VerifierModel
-                   : !string.IsNullOrWhiteSpace(modelId)             ? modelId
+        var prompt = BuildPrompt(response, TruncateEvidence(evidence));
+        var opts = _llm.DirectProvider;
+        var model = !string.IsNullOrWhiteSpace(_opts.VerifierModel) ? _opts.VerifierModel
+                   : !string.IsNullOrWhiteSpace(modelId) ? modelId
                    : opts.Model;
 
         if (opts.Provider.Equals("Anthropic", StringComparison.OrdinalIgnoreCase))
@@ -194,10 +238,10 @@ public sealed class ResponseVerifier
     {
         var parameters = new MessageParameters
         {
-            Model     = model,
+            Model = model,
             MaxTokens = _opts.VerifierMaxTokens,
-            System    = [new SystemMessage("You are a JSON-only fact-checking assistant. Respond ONLY with valid JSON.")],
-            Messages  = [new Message
+            System = [new SystemMessage("You are a JSON-only fact-checking assistant. Respond ONLY with valid JSON.")],
+            Messages = [new Message
             {
                 Role    = RoleType.User,
                 Content = [new Anthropic.SDK.Messaging.TextContent { Text = prompt }]
@@ -221,6 +265,16 @@ public sealed class ResponseVerifier
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private string TruncateEvidence(string evidence)
+    {
+        var cap = _opts.MaxVerifierEvidenceChars;
+        if (cap <= 0 || string.IsNullOrEmpty(evidence) || evidence.Length <= cap)
+            return evidence;
+
+        return evidence[..cap] +
+               $"\n\n... [evidence truncated at {cap} chars for verification]";
+    }
 
     private static string BuildPrompt(string response, string evidence)
     {
@@ -256,16 +310,16 @@ public sealed class ResponseVerifier
 
         // Extract just the JSON object in case the model appended explanation text
         var firstBrace = json.IndexOf('{');
-        var lastBrace  = json.LastIndexOf('}');
+        var lastBrace = json.LastIndexOf('}');
         if (firstBrace >= 0 && lastBrace > firstBrace)
             json = json[firstBrace..(lastBrace + 1)];
 
-        using var doc  = JsonDocument.Parse(json);
-        var root       = doc.RootElement;
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
 
-        var confidence = root.TryGetProperty("confidence",   out var conf) ? (float)conf.GetDouble() : 0.5f;
-        var isVerified = root.TryGetProperty("is_verified",  out var iv)   && iv.GetBoolean();
-        var reasoning  = root.TryGetProperty("reasoning",    out var r)    ? r.GetString() : null;
+        var confidence = root.TryGetProperty("confidence", out var conf) ? (float)conf.GetDouble() : 0.5f;
+        var isVerified = root.TryGetProperty("is_verified", out var iv) && iv.GetBoolean();
+        var reasoning = root.TryGetProperty("reasoning", out var r) ? r.GetString() : null;
 
         var claims = new List<string>();
         if (root.TryGetProperty("ungrounded_claims", out var uc) && uc.ValueKind == JsonValueKind.Array)
@@ -275,10 +329,10 @@ public sealed class ResponseVerifier
 
         return new VerificationResult
         {
-            IsVerified       = isVerified,
-            Confidence       = confidence,
+            IsVerified = isVerified,
+            Confidence = confidence,
             UngroundedClaims = claims,
-            Reasoning        = reasoning
+            Reasoning = reasoning
         };
     }
 

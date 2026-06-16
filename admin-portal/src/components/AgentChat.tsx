@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { useNavigate, useParams, useLocation } from "react-router";
+import { Link, useNavigate, useParams, useLocation, useSearchParams } from "react-router";
 import DOMPurify from "dompurify";
 import { toast } from "sonner";
 import {
@@ -7,6 +7,7 @@ import {
   Bot,
   ChevronDown,
   ChevronRight,
+  History,
   RotateCcw,
   Send,
   User,
@@ -20,6 +21,8 @@ import {
   type AvailableLlmConfig,
   type VerificationResult,
   type FollowUpQuestion,
+  type TurnSummary,
+  type IterationDetail,
 } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -51,6 +54,9 @@ interface ToolCall {
   name: string;
   input: string;
   output?: string;
+  isDelegation?: boolean;
+  delegatedAgentName?: string;
+  childSessionId?: string;
 }
 
 interface Iteration {
@@ -75,6 +81,50 @@ interface Message {
   verification?: VerificationResult;
   followUpQuestions?: FollowUpQuestion[];
   error?: boolean;
+}
+
+// Maps a stored turn's iteration detail into the chat's iteration trace,
+// preserving sub-agent (delegation) calls with a link to the child session.
+function iterationsToTrace(iters: IterationDetail[]): Iteration[] {
+  return iters.map((it) => ({
+    number: it.iterationNumber,
+    thinking: it.thinkingText ?? undefined,
+    toolCalls: it.toolCalls.map((tc) => ({
+      name: tc.isAgentDelegation && tc.delegatedAgentName ? tc.delegatedAgentName : tc.toolName,
+      input: tc.toolInput ?? "",
+      output: tc.toolOutput ?? "",
+      isDelegation: tc.isAgentDelegation,
+      delegatedAgentName: tc.delegatedAgentName,
+      childSessionId: tc.childSessionId,
+    })),
+  }));
+}
+
+// Builds the resumed chat history. Loads each turn's full iteration trace in
+// parallel so historical sub-agent calls (delegations) are visible — falling
+// back to a lightweight text bubble if a turn's trace can't be loaded.
+async function buildResumedMessages(sessionId: string, turns: TurnSummary[]): Promise<Message[]> {
+  const iterLists = await Promise.all(
+    turns.map((t) =>
+      api.getTurnIterations(sessionId, t.turnNumber).catch(() => [] as IterationDetail[]),
+    ),
+  );
+
+  const msgs: Message[] = [];
+  turns.forEach((t, idx) => {
+    msgs.push({ role: "user", text: t.userMessage ?? t.userMessagePreview ?? "" });
+
+    const trace = iterationsToTrace(iterLists[idx]);
+    const toolsUsed = trace.flatMap((i) => i.toolCalls.map((c) => c.name));
+    msgs.push({
+      role: "agent",
+      text: t.assistantMessage ?? t.assistantMessagePreview ?? "(no response)",
+      iterations: trace.length > 0 ? trace : undefined,
+      toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+      executionTime: t.executionTimeMs > 0 ? `${(t.executionTimeMs / 1000).toFixed(1)}s` : undefined,
+    });
+  });
+  return msgs;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -123,10 +173,19 @@ function IterationTrace({ iterations, detailed }: { iterations: Iteration[]; det
                 </p>
               )}
               {iter.toolCalls.map((tc, ti) => (
-                <div key={ti} className="pl-2 border-l-2 border-amber-600/50 space-y-1">
-                  <div className="font-medium text-amber-400 flex items-center gap-1">
-                    <Wrench className="size-3" />{tc.name}
+                <div key={ti} className={cn("pl-2 border-l-2 space-y-1", tc.isDelegation ? "border-violet-500/50" : "border-amber-600/50")}>
+                  <div className={cn("font-medium flex items-center gap-1", tc.isDelegation ? "text-violet-400" : "text-amber-400")}>
+                    {tc.isDelegation ? <Bot className="size-3" /> : <Wrench className="size-3" />}
+                    {tc.isDelegation ? `Sub-agent: ${tc.delegatedAgentName ?? tc.name}` : tc.name}
                     {tc.output === undefined && <span className="text-muted-foreground ml-1">⏳</span>}
+                    {tc.isDelegation && tc.childSessionId && (
+                      <Link
+                        to={`/sessions/${tc.childSessionId}`}
+                        className="ml-1 text-[10px] text-primary hover:underline"
+                      >
+                        view session
+                      </Link>
+                    )}
                   </div>
                   <pre className="text-[11px] text-foreground/70 whitespace-pre-wrap break-words bg-background/50 rounded p-1.5 overflow-auto max-h-24">
                     {tc.input}
@@ -262,6 +321,7 @@ export function AgentChat() {
   const { id: agentId } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const agentFromState = (location.state as { agent?: AgentSummary } | null)?.agent;
 
   const [agent, setAgent] = useState<AgentSummary | undefined>(agentFromState);
@@ -269,6 +329,7 @@ export function AgentChat() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | undefined>(undefined);
+  const [resumedTurns, setResumedTurns] = useState<number | null>(null);
   const [llmConfig, setLlmConfig] = useState<LlmConfig>({ availableModels: [], currentProvider: "", defaultModel: "" });
   const [selectedModel, setSelectedModel] = useState<string>("");
   const [availableLlmConfigs, setAvailableLlmConfigs] = useState<AvailableLlmConfig[]>([]);
@@ -282,6 +343,7 @@ export function AgentChat() {
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const hydratedRef = useRef<string | null>(null);
 
   // Load agent definition (needed for llmConfigId) and available configs for the tenant
   useEffect(() => {
@@ -315,14 +377,42 @@ export function AgentChat() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, liveIterations, liveStatus]);
 
+  // Resume a stored session: when ?sessionId= is present, hydrate the chat with
+  // the prior turns and bind subsequent messages to the same session. The backend
+  // /continue endpoint has already reactivated the conversation memory so the LLM
+  // will replay full context on the next turn.
+  useEffect(() => {
+    const resumeId = searchParams.get("sessionId");
+    if (!resumeId || hydratedRef.current === resumeId) return;
+    hydratedRef.current = resumeId;
+
+    api.getSession(resumeId)
+      .then(async (detail) => {
+        setSessionId(resumeId);
+        setResumedTurns(detail.turns?.length ?? 0);
+        const msgs = await buildResumedMessages(resumeId, detail.turns ?? []);
+        setMessages(msgs);
+      })
+      .catch((e: Error) => {
+        toast.error("Could not load session to resume", { description: e.message });
+        hydratedRef.current = null;
+        setSearchParams((p) => { p.delete("sessionId"); return p; }, { replace: true });
+      });
+  }, [searchParams, setSearchParams]);
+
   const clearChat = () => {
     abortRef.current?.abort();
+    hydratedRef.current = null;
     setMessages([]);
     setSessionId(undefined);
+    setResumedTurns(null);
     setLiveIterations([]);
     setLiveTimeline([]);
     setLiveStatus("");
     setLivePlan(null);
+    if (searchParams.has("sessionId")) {
+      setSearchParams((p) => { p.delete("sessionId"); return p; }, { replace: true });
+    }
   };
 
   const send = async () => {
@@ -553,6 +643,16 @@ export function AgentChat() {
       {/* Messages */}
       <ScrollArea className="flex-1 pr-4">
         <div className="space-y-6 pb-4">
+          {resumedTurns !== null && (
+            <div className="flex items-center gap-2 rounded-md border border-sky-500/30 bg-sky-500/5 px-3 py-2 text-xs text-muted-foreground">
+              <History className="size-3.5 text-sky-400 shrink-0" />
+              <span>
+                Resumed session{resumedTurns > 0 ? ` — ${resumedTurns} prior turn${resumedTurns !== 1 ? "s" : ""} loaded` : ""}.
+                New messages continue this conversation. Use <span className="font-medium text-foreground">Clear</span> to start fresh.
+              </span>
+            </div>
+          )}
+
           {messages.length === 0 && !loading && (
             <div className="flex flex-col items-center justify-center pt-20 gap-3">
               <div className="rounded-full bg-muted p-4">

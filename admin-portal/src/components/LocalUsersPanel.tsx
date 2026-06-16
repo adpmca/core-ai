@@ -10,14 +10,20 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Plus, Trash2, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 
-const DEFAULT_ROLES = ["admin", "user", "viewer"];
+export function LocalUsersPanel({
+  tenantId,
+  availableRoles = ["admin", "user", "viewer"],
+  defaultRoles = ["user"],
+}: {
+  tenantId: number;
+  availableRoles?: string[];
+  defaultRoles?: string[];
+}) {
+  const emptyForm: CreateLocalUserDto = {
+    username: "", email: "", password: "changemeonlogin",
+    displayName: "", roles: defaultRoles,
+  };
 
-const emptyForm: CreateLocalUserDto = {
-  username: "", email: "", password: "changemeonlogin",
-  displayName: "", roles: ["user"],
-};
-
-export function LocalUsersPanel({ tenantId }: { tenantId: number }) {
   const [users,       setUsers]       = useState<LocalUser[]>([]);
   const [loading,     setLoading]     = useState(true);
   const [addOpen,     setAddOpen]     = useState(false);
@@ -168,7 +174,7 @@ export function LocalUsersPanel({ tenantId }: { tenantId: number }) {
             <div className="space-y-1">
               <Label>Roles</Label>
               <div className="flex gap-3">
-                {DEFAULT_ROLES.map(r => (
+                {availableRoles.map(r => (
                   <label key={r} className="flex items-center gap-1.5 text-sm cursor-pointer">
                     <input type="checkbox" checked={form.roles.includes(r)} onChange={() => toggleRole(r)} />
                     {r}

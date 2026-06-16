@@ -15,6 +15,8 @@ import {
   ScrollText,
   Shield,
   ShieldAlert,
+  ShieldCheck,
+  Star,
   Users,
   Zap,
   Code2,
@@ -51,6 +53,7 @@ const tenantNavGroups = [
     items: [
       { title: "All Agents", url: "/agents", icon: Bot },
       { title: "New Agent", url: "/agents/new", icon: Plus },
+      { title: "Access Groups", url: "/agents/groups", icon: ShieldCheck },
     ],
   },
   {
@@ -62,6 +65,7 @@ const tenantNavGroups = [
       { title: "Rule Packs", url: "/rules/packs", icon: Package },
       { title: "Sessions", url: "/sessions", icon: History },
       { title: "Schedules", url: "/schedules", icon: Calendar },
+      { title: "Schedule Feedback", url: "/schedules/feedback", icon: Star },
     ],
   },
   {
@@ -83,9 +87,22 @@ const platformNavGroups = [
   {
     label: "Platform Admin",
     items: [
-      { title: "Tenants",    url: "/platform/tenants",    icon: Building2, badgeKey: undefined },
-      { title: "Groups",     url: "/platform/groups",     icon: Layers,    badgeKey: undefined },
-      { title: "LLM Config", url: "/platform/llm-config", icon: Cpu,       badgeKey: undefined },
+      { title: "Tenants",    url: "/platform/tenants",    icon: Building2,  badgeKey: undefined },
+      { title: "Groups",     url: "/platform/groups",     icon: Layers,     badgeKey: undefined },
+      { title: "LLM Config", url: "/platform/llm-config", icon: Cpu,        badgeKey: undefined },
+      { title: "Admins",     url: "/platform/admins",     icon: ShieldAlert, badgeKey: undefined },
+    ],
+  },
+];
+
+// ── Chat-user navigation (role "user" / "viewer" — no admin functionality) ────────
+
+const chatUserNavGroups = [
+  {
+    label: "Workspace",
+    items: [
+      { title: "Agents", url: "/agents", icon: Bot },
+      { title: "Chat History", url: "/sessions", icon: History },
     ],
   },
 ];
@@ -97,7 +114,12 @@ interface AppSidebarProps {
 export function AppSidebar({ pendingRuleCount = 0 }: AppSidebarProps) {
   const location    = useLocation();
   const isMaster    = auth.isMasterAdmin();
-  const navGroups   = isMaster ? platformNavGroups : tenantNavGroups;
+  const isAdmin     = auth.isAdmin();
+  const navGroups   = isMaster
+    ? platformNavGroups
+    : isAdmin
+      ? tenantNavGroups
+      : chatUserNavGroups;
 
   return (
     <Sidebar collapsible="icon">

@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Separator } from "@/components/ui/separator";
-import { ChevronDown, ChevronRight, ArrowLeft, Copy, Download, Trash2, Maximize2 } from "lucide-react";
+import { ChevronDown, ChevronRight, ArrowLeft, Copy, Download, Trash2, Maximize2, MessageSquare } from "lucide-react";
 
 const MSG_PREVIEW_THRESHOLD = 300;
 
@@ -67,6 +67,16 @@ export default function SessionDetail() {
   const handleAnalyzeSession = () => {
     if (!id || !session) return;
     navigate(`/agents/${session.agentId}/optimize?sessionId=${id}`);
+  };
+
+  const handleContinue = async () => {
+    if (!id || !session) return;
+    try {
+      const res = await api.continueSession(id);
+      navigate(`/agents/${res.agentId}/chat?sessionId=${encodeURIComponent(res.sessionId)}`);
+    } catch (e) {
+      setError((e as { error?: string })?.error ?? "Failed to continue session");
+    }
   };
 
   const handleMarkAsExample = async (turnNumber: number) => {
@@ -159,6 +169,10 @@ export default function SessionDetail() {
           <Button variant="outline" size="sm" onClick={handleAnalyzeSession}
             className="gap-1 text-blue-600 border-blue-300 hover:bg-blue-50">
             Analyze Session
+          </Button>
+          <Button variant="outline" size="sm" onClick={handleContinue}
+            className="gap-1 text-emerald-600 border-emerald-300 hover:bg-emerald-50">
+            <MessageSquare className="size-3" /> Continue in Chat
           </Button>
         </div>
 

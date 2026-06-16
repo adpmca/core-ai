@@ -10,6 +10,14 @@ public sealed class VerificationOptions
     /// <summary>Confidence below this value triggers a block in Strict mode.</summary>
     public float ConfidenceThreshold { get; init; } = 0.5f;
 
+    /// <summary>
+    /// Auto mode only. When the cheap tool-grounded heuristic returns confidence below this value
+    /// AND tool evidence is available, Auto escalates to a (non-blocking) LLM cross-check instead of
+    /// accepting the heuristic verdict. Keeps the common case zero-cost while catching low-confidence
+    /// responses (e.g. action/delivery claims tools can't directly prove). Set to 0 to disable escalation.
+    /// </summary>
+    public float AutoEscalateThreshold { get; init; } = 0.7f;
+
     /// <summary>Include the verifier's reasoning text in the API response.</summary>
     public bool IncludeReasoningInResponse { get; init; } = false;
 
@@ -21,4 +29,11 @@ public sealed class VerificationOptions
 
     /// <summary>Max output tokens for the LLM verifier call.</summary>
     public int VerifierMaxTokens { get; init; } = 1024;
+
+    /// <summary>
+    /// Max characters of tool evidence sent into the LLM verifier prompt. Deep tool runs can
+    /// accumulate tens of thousands of tokens of evidence; capping it bounds verifier input cost
+    /// without materially hurting grounding accuracy. 0 disables the cap.
+    /// </summary>
+    public int MaxVerifierEvidenceChars { get; init; } = 4000;
 }

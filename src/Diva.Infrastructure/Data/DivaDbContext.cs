@@ -63,11 +63,18 @@ public class DivaDbContext : DbContext
     // ── Embeddable Chat Widgets ───────────────────────────────────────────────
     public DbSet<WidgetConfigEntity> WidgetConfigs => Set<WidgetConfigEntity>();
 
+    // ── Agent Access Groups (Phase 28) ────────────────────────────────────────
+    public DbSet<AgentGroupEntity> AgentGroups => Set<AgentGroupEntity>();
+
     // ── Phase 24: Agent Optimization ──────────────────────────────────────────
     public DbSet<AgentOptimizationRunEntity> OptimizationRuns => Set<AgentOptimizationRunEntity>();
     public DbSet<AgentOptimizationSuggestionEntity> OptimizationSuggestions => Set<AgentOptimizationSuggestionEntity>();
     public DbSet<AgentOptimizationConfigEntity> OptimizationConfigs => Set<AgentOptimizationConfigEntity>();
     public DbSet<FewShotExampleEntity> FewShotExamples => Set<FewShotExampleEntity>();
+
+    // ── Scheduler Feedback ────────────────────────────────────────────────────
+    public DbSet<SchedulerFeedbackEntity> SchedulerFeedbacks => Set<SchedulerFeedbackEntity>();
+    public DbSet<TenantFeedbackSettingsEntity> TenantFeedbackSettings => Set<TenantFeedbackSettingsEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -239,6 +246,9 @@ public class DivaDbContext : DbContext
         modelBuilder.Entity<TenantNotificationSettingsEntity>()
             .HasKey(e => e.TenantId);
 
+        modelBuilder.Entity<TenantFeedbackSettingsEntity>()
+            .HasKey(e => e.TenantId);
+
         // GroupLlmConfig: 1:many per group; optional FK reference to PlatformLlmConfigs
         modelBuilder.Entity<GroupLlmConfigEntity>()
             .HasOne(c => c.Group).WithMany(g => g.LlmConfigs)
@@ -360,6 +370,14 @@ public class DivaDbContext : DbContext
         modelBuilder.Entity<WidgetConfigEntity>()
             .HasIndex(e => new { e.TenantId, e.IsActive });
 
+        // ── Agent Access Groups (Phase 28) ────────────────────
+        modelBuilder.Entity<AgentGroupEntity>()
+            .HasKey(e => e.Id);
+        modelBuilder.Entity<AgentGroupEntity>()
+            .HasQueryFilter(e => _currentTenantId == 0 || e.TenantId == _currentTenantId);
+        modelBuilder.Entity<AgentGroupEntity>()
+            .HasIndex(e => e.TenantId);
+
         // ── Phase 24: Agent Optimization ─────────────────────
         modelBuilder.Entity<AgentOptimizationRunEntity>()
             .HasQueryFilter(e => _currentTenantId == 0 || e.TenantId == _currentTenantId);
@@ -385,6 +403,14 @@ public class DivaDbContext : DbContext
             .HasQueryFilter(e => _currentTenantId == 0 || e.TenantId == _currentTenantId);
         modelBuilder.Entity<FewShotExampleEntity>()
             .HasIndex(e => new { e.TenantId, e.AgentId, e.SortOrder });
+
+        // ── Scheduler Feedback ────────────────────────────────
+        modelBuilder.Entity<SchedulerFeedbackEntity>()
+            .HasQueryFilter(e => _currentTenantId == 0 || e.TenantId == _currentTenantId);
+        modelBuilder.Entity<SchedulerFeedbackEntity>()
+            .HasIndex(e => new { e.TenantId, e.Status, e.SubmittedAt });
+        modelBuilder.Entity<SchedulerFeedbackEntity>()
+            .HasIndex(e => e.RunId);
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken ct = default)

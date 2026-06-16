@@ -10,7 +10,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { api, type SsoProvider } from "@/api";
 import { APP_NAME, storageKey } from "@/lib/brand";
 
-const API_BASE  = import.meta.env.VITE_API_URL  ?? "http://localhost:5062";
+const API_BASE  = import.meta.env.VITE_API_URL ?? import.meta.env.BASE_URL.replace(/\/$/, '');
 const TENANT_ID = import.meta.env.VITE_TENANT_ID ?? "";   // non-empty = single-tenant deployment
 
 /**
@@ -138,6 +138,7 @@ export function LoginPage() {
       localStorage.setItem(storageKey("token"),        data.token);
       localStorage.setItem(storageKey("tenant_id"),    String(data.tenantId));   // "0"
       localStorage.setItem(storageKey("is_master_admin"), "true");
+      localStorage.setItem(storageKey("is_admin"), "true");
       if (data.email) localStorage.setItem(storageKey("user_email"), data.email);
       if (data.name)  localStorage.setItem(storageKey("user_name"),  data.name);
       if (data.userId) localStorage.setItem(storageKey("user_id"),   data.userId);
@@ -181,7 +182,11 @@ export function LoginPage() {
       if (data.name)   localStorage.setItem(storageKey("user_name"),  data.name);
       if (data.userId) localStorage.setItem(storageKey("user_id"),    data.userId);
 
-      navigate("/dashboard", { replace: true });
+      const isAdmin = data.isAdmin === true;
+      if (isAdmin) localStorage.setItem(storageKey("is_admin"), "true");
+      else         localStorage.removeItem(storageKey("is_admin"));
+
+      navigate(isAdmin ? "/dashboard" : "/agents", { replace: true });
     } catch {
       setError("Network error — could not reach the server.");
     } finally {

@@ -1,7 +1,10 @@
+using Diva.Core.Models;
 using Diva.Core.Models.Session;
+using Diva.Host.Auth;
 using Diva.Infrastructure.Auth;
 using Diva.Infrastructure.Data;
 using Diva.Infrastructure.Data.Entities;
+using Diva.Infrastructure.Sessions;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Text.Json;
@@ -13,6 +16,7 @@ namespace Diva.Host.Controllers;
 public class SessionsController : ControllerBase
 {
     private readonly SessionTraceDbContext _trace;
+    private readonly AgentSessionService _sessions;
     private readonly ILogger<SessionsController> _logger;
 
     private static readonly JsonSerializerOptions _exportJsonOpts = new()
@@ -21,9 +25,18 @@ public class SessionsController : ControllerBase
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
-    public SessionsController(SessionTraceDbContext trace, ILogger<SessionsController> logger)
+    // Regular users (role "user" / "viewer") may only see their own sessions.
+    // Tenant admins and the master admin see all sessions in their tenant.
+    private static bool IsRestrictedUser(TenantContext? ctx)
+        => ctx is not null && !ctx.IsAdmin && !ctx.IsMasterAdmin;
+
+    public SessionsController(
+        SessionTraceDbContext trace,
+        AgentSessionService sessions,
+        ILogger<SessionsController> logger)
     {
         _trace = trace;
+        _sessions = sessions;
         _logger = logger;
     }
 
@@ -45,6 +58,21 @@ public class SessionsController : ControllerBase
     {
         var ctx = HttpContext.TryGetTenantContext();
         var effectiveTenantId = ctx is { TenantId: > 0 } ? ctx.TenantId : tenantId;
+
+        // Non-admin users (user / viewer) may only see their own sessions.
+        if (IsRestrictedUser(ctx))
+        {
+            userId = ctx!.UserId;
+            if (string.IsNullOrEmpty(userId))
+                return Ok(new PagedResult<SessionSummary>
+                {
+                    Items = [],
+                    Page = page,
+                    PageSize = pageSize,
+                    TotalCount = 0,
+                    TotalPages = 0,
+                });
+        }
 
         var query = _trace.TraceSessions.AsNoTracking();
 
@@ -76,30 +104,30 @@ public class SessionsController : ControllerBase
             .Take(pageSize)
             .Select(s => new SessionSummary
             {
-                SessionId        = s.SessionId,
-                ParentSessionId  = s.ParentSessionId,
-                TenantId         = s.TenantId,
-                UserId           = s.UserId,
-                AgentId          = s.AgentId,
-                AgentName        = s.AgentName,
-                IsSupervisor     = s.IsSupervisor,
-                Status           = s.Status,
-                CreatedAt        = s.CreatedAt,
-                LastActivityAt   = s.LastActivityAt,
-                TotalTurns       = s.TotalTurns,
-                TotalIterations  = s.TotalIterations,
-                TotalToolCalls   = s.TotalToolCalls,
+                SessionId = s.SessionId,
+                ParentSessionId = s.ParentSessionId,
+                TenantId = s.TenantId,
+                UserId = s.UserId,
+                AgentId = s.AgentId,
+                AgentName = s.AgentName,
+                IsSupervisor = s.IsSupervisor,
+                Status = s.Status,
+                CreatedAt = s.CreatedAt,
+                LastActivityAt = s.LastActivityAt,
+                TotalTurns = s.TotalTurns,
+                TotalIterations = s.TotalIterations,
+                TotalToolCalls = s.TotalToolCalls,
                 TotalDelegations = s.TotalDelegations,
-                TotalInputTokens  = s.TotalInputTokens,
+                TotalInputTokens = s.TotalInputTokens,
                 TotalOutputTokens = s.TotalOutputTokens,
             })
             .ToListAsync(ct);
 
         return Ok(new PagedResult<SessionSummary>
         {
-            Items      = items,
-            Page       = page,
-            PageSize   = pageSize,
+            Items = items,
+            Page = page,
+            PageSize = pageSize,
             TotalCount = total,
             TotalPages = (int)Math.Ceiling((double)total / pageSize),
         });
@@ -109,11 +137,20 @@ public class SessionsController : ControllerBase
     [HttpGet("{id}")]
     public async Task<ActionResult<SessionDetail>> GetSession(string id, CancellationToken ct)
     {
+        var ctx = HttpContext.TryGetTenantContext();
+        var effectiveTenantId = ctx is { TenantId: > 0 } ? ctx.TenantId : (int?)null;
+
         var session = await _trace.TraceSessions
             .AsNoTracking()
             .FirstOrDefaultAsync(s => s.SessionId == id, ct);
 
         if (session is null || session.Status == "deleted")
+            return NotFound();
+
+        if (effectiveTenantId.HasValue && session.TenantId != effectiveTenantId.Value)
+            return NotFound();
+
+        if (IsRestrictedUser(ctx) && session.UserId != ctx!.UserId)
             return NotFound();
 
         var turns = await _trace.TraceSessionTurns
@@ -122,44 +159,44 @@ public class SessionsController : ControllerBase
             .OrderBy(t => t.TurnNumber)
             .Select(t => new TurnSummary
             {
-                TurnNumber              = t.TurnNumber,
-                UserMessagePreview      = t.UserMessage.Length > 200 ? t.UserMessage.Substring(0, 200) : t.UserMessage,
+                TurnNumber = t.TurnNumber,
+                UserMessagePreview = t.UserMessage.Length > 200 ? t.UserMessage.Substring(0, 200) : t.UserMessage,
                 AssistantMessagePreview = t.AssistantMessage.Length > 200 ? t.AssistantMessage.Substring(0, 200) : t.AssistantMessage,
-                UserMessage             = t.UserMessage,
-                AssistantMessage        = t.AssistantMessage,
-                TotalIterations         = t.TotalIterations,
-                TotalToolCalls          = t.TotalToolCalls,
-                ContinuationWindows     = t.ContinuationWindows,
-                VerificationMode        = t.VerificationMode,
-                VerificationPassed      = t.VerificationPassed,
-                ExecutionTimeMs         = t.ExecutionTimeMs,
-                ModelId                 = t.ModelId,
-                Provider                = t.Provider,
-                TotalInputTokens        = t.TotalInputTokens,
-                TotalOutputTokens       = t.TotalOutputTokens,
-                CreatedAt               = t.CreatedAt,
+                UserMessage = t.UserMessage,
+                AssistantMessage = t.AssistantMessage,
+                TotalIterations = t.TotalIterations,
+                TotalToolCalls = t.TotalToolCalls,
+                ContinuationWindows = t.ContinuationWindows,
+                VerificationMode = t.VerificationMode,
+                VerificationPassed = t.VerificationPassed,
+                ExecutionTimeMs = t.ExecutionTimeMs,
+                ModelId = t.ModelId,
+                Provider = t.Provider,
+                TotalInputTokens = t.TotalInputTokens,
+                TotalOutputTokens = t.TotalOutputTokens,
+                CreatedAt = t.CreatedAt,
             })
             .ToListAsync(ct);
 
         return Ok(new SessionDetail
         {
-            SessionId        = session.SessionId,
-            ParentSessionId  = session.ParentSessionId,
-            TenantId         = session.TenantId,
-            UserId           = session.UserId,
-            AgentId          = session.AgentId,
-            AgentName        = session.AgentName,
-            IsSupervisor     = session.IsSupervisor,
-            Status           = session.Status,
-            CreatedAt        = session.CreatedAt,
-            LastActivityAt   = session.LastActivityAt,
-            TotalTurns       = session.TotalTurns,
-            TotalIterations  = session.TotalIterations,
-            TotalToolCalls   = session.TotalToolCalls,
+            SessionId = session.SessionId,
+            ParentSessionId = session.ParentSessionId,
+            TenantId = session.TenantId,
+            UserId = session.UserId,
+            AgentId = session.AgentId,
+            AgentName = session.AgentName,
+            IsSupervisor = session.IsSupervisor,
+            Status = session.Status,
+            CreatedAt = session.CreatedAt,
+            LastActivityAt = session.LastActivityAt,
+            TotalTurns = session.TotalTurns,
+            TotalIterations = session.TotalIterations,
+            TotalToolCalls = session.TotalToolCalls,
             TotalDelegations = session.TotalDelegations,
-            TotalInputTokens  = session.TotalInputTokens,
+            TotalInputTokens = session.TotalInputTokens,
             TotalOutputTokens = session.TotalOutputTokens,
-            Turns            = turns,
+            Turns = turns,
         });
     }
 
@@ -168,6 +205,29 @@ public class SessionsController : ControllerBase
     public async Task<ActionResult<List<IterationDetail>>> GetTurnIterations(
         string id, int turnNumber, CancellationToken ct)
     {
+        var ctx = HttpContext.TryGetTenantContext();
+        var effectiveTenantId = ctx is { TenantId: > 0 } ? ctx.TenantId : (int?)null;
+
+        if (effectiveTenantId.HasValue)
+        {
+            var sessionTenant = await _trace.TraceSessions.AsNoTracking()
+                .Where(s => s.SessionId == id)
+                .Select(s => (int?)s.TenantId)
+                .FirstOrDefaultAsync(ct);
+            if (sessionTenant is null || sessionTenant != effectiveTenantId.Value)
+                return NotFound();
+        }
+
+        if (IsRestrictedUser(ctx))
+        {
+            var ownerId = await _trace.TraceSessions.AsNoTracking()
+                .Where(s => s.SessionId == id)
+                .Select(s => s.UserId)
+                .FirstOrDefaultAsync(ct);
+            if (ownerId != ctx!.UserId)
+                return NotFound();
+        }
+
         var turn = await _trace.TraceSessionTurns
             .AsNoTracking()
             .FirstOrDefaultAsync(t => t.SessionId == id && t.TurnNumber == turnNumber, ct);
@@ -211,32 +271,32 @@ public class SessionsController : ControllerBase
 
         var result = iterations.Select(iter => new IterationDetail
         {
-            IterationNumber    = iter.IterationNumber,
+            IterationNumber = iter.IterationNumber,
             ContinuationWindow = iter.ContinuationWindow,
-            IsCorrection       = iter.IsCorrection,
-            ThinkingText       = iter.ThinkingText,
-            PlanText           = iter.PlanText,
-            ModelId            = iter.ModelId,
-            Provider           = iter.Provider,
-            HadModelSwitch     = iter.HadModelSwitch,
-            FromModel          = iter.FromModel,
-            ToModel            = iter.ToModel,
-            ModelSwitchReason  = iter.ModelSwitchReason,
-            InputTokens        = iter.InputTokens,
-            OutputTokens       = iter.OutputTokens,
-            CacheReadTokens    = iter.CacheReadTokens,
+            IsCorrection = iter.IsCorrection,
+            ThinkingText = iter.ThinkingText,
+            PlanText = iter.PlanText,
+            ModelId = iter.ModelId,
+            Provider = iter.Provider,
+            HadModelSwitch = iter.HadModelSwitch,
+            FromModel = iter.FromModel,
+            ToModel = iter.ToModel,
+            ModelSwitchReason = iter.ModelSwitchReason,
+            InputTokens = iter.InputTokens,
+            OutputTokens = iter.OutputTokens,
+            CacheReadTokens = iter.CacheReadTokens,
             CacheCreationTokens = iter.CacheCreationTokens,
             ToolCalls = toolsByIter[iter.Id].Select(tc => new ToolCallDetail
             {
-                Sequence           = tc.Sequence,
-                ToolName           = tc.ToolName,
-                ToolInput          = tc.ToolInput,
-                ToolOutput         = tc.ToolOutput,
-                IsAgentDelegation  = tc.IsAgentDelegation,
-                DelegatedAgentId   = tc.DelegatedAgentId,
+                Sequence = tc.Sequence,
+                ToolName = tc.ToolName,
+                ToolInput = tc.ToolInput,
+                ToolOutput = tc.ToolOutput,
+                IsAgentDelegation = tc.IsAgentDelegation,
+                DelegatedAgentId = tc.DelegatedAgentId,
                 DelegatedAgentName = tc.DelegatedAgentName,
-                LinkedA2ATaskId    = tc.LinkedA2ATaskId,
-                ChildSessionId     = tc.LinkedA2ATaskId != null
+                LinkedA2ATaskId = tc.LinkedA2ATaskId,
+                ChildSessionId = tc.LinkedA2ATaskId != null
                     ? childSessionMap.GetValueOrDefault(tc.LinkedA2ATaskId)
                     : null,
             }).ToList(),
@@ -249,9 +309,18 @@ public class SessionsController : ControllerBase
     [HttpGet("{id}/tree")]
     public async Task<ActionResult<List<SessionTreeNode>>> GetSessionTree(string id, CancellationToken ct)
     {
+        var ctx = HttpContext.TryGetTenantContext();
+        var effectiveTenantId = ctx is { TenantId: > 0 } ? ctx.TenantId : (int?)null;
+
         var current = await _trace.TraceSessions.AsNoTracking()
             .FirstOrDefaultAsync(s => s.SessionId == id, ct);
         if (current is null) return NotFound();
+
+        if (effectiveTenantId.HasValue && current.TenantId != effectiveTenantId.Value)
+            return NotFound();
+
+        if (IsRestrictedUser(ctx) && current.UserId != ctx!.UserId)
+            return NotFound();
 
         // Walk up to the true root
         var rootId = id;
@@ -269,7 +338,7 @@ public class SessionsController : ControllerBase
     private async Task<List<TraceSessionEntity>> LoadSubtreeAsync(string rootId, CancellationToken ct)
     {
         var result = new List<TraceSessionEntity>();
-        var queue  = new Queue<string>();
+        var queue = new Queue<string>();
         queue.Enqueue(rootId);
 
         while (queue.Count > 0)
@@ -301,15 +370,15 @@ public class SessionsController : ControllerBase
     private static SessionTreeNode BuildNode(TraceSessionEntity s, List<TraceSessionEntity> all, string currentId) =>
         new()
         {
-            SessionId        = s.SessionId,
-            AgentName        = s.AgentName,
-            IsSupervisor     = s.IsSupervisor,
-            Status           = s.Status,
-            TotalTurns       = s.TotalTurns,
-            TotalIterations  = s.TotalIterations,
-            TotalToolCalls   = s.TotalToolCalls,
+            SessionId = s.SessionId,
+            AgentName = s.AgentName,
+            IsSupervisor = s.IsSupervisor,
+            Status = s.Status,
+            TotalTurns = s.TotalTurns,
+            TotalIterations = s.TotalIterations,
+            TotalToolCalls = s.TotalToolCalls,
             IsCurrentSession = s.SessionId == currentId,
-            Children         = all
+            Children = all
                 .Where(c => c.ParentSessionId == s.SessionId)
                 .Select(c => BuildNode(c, all, currentId))
                 .ToList(),
@@ -319,10 +388,19 @@ public class SessionsController : ControllerBase
     [HttpGet("{id}/export")]
     public async Task<IActionResult> ExportSession(string id, CancellationToken ct)
     {
+        var ctx = HttpContext.TryGetTenantContext();
+        var effectiveTenantId = ctx is { TenantId: > 0 } ? ctx.TenantId : (int?)null;
+
         var session = await _trace.TraceSessions
             .AsNoTracking()
             .FirstOrDefaultAsync(s => s.SessionId == id, ct);
         if (session is null) return NotFound();
+
+        if (effectiveTenantId.HasValue && session.TenantId != effectiveTenantId.Value)
+            return NotFound();
+
+        if (IsRestrictedUser(ctx) && session.UserId != ctx!.UserId)
+            return NotFound();
 
         var turns = await _trace.TraceSessionTurns.AsNoTracking()
             .Where(t => t.SessionId == id).ToListAsync(ct);
@@ -348,13 +426,65 @@ public class SessionsController : ControllerBase
             "application/json", $"session-{id[..8]}.json");
     }
 
+    /// <summary>
+    /// POST /api/sessions/{id}/continue — reactivate a stored session so it can be
+    /// resumed in Agent Test. Returns the agent + turn metadata needed to open chat
+    /// and append new turns to the same session.
+    /// </summary>
+    [HttpPost("{id}/continue")]
+    public async Task<ActionResult<ContinueSessionResult>> ContinueSession(string id, CancellationToken ct)
+    {
+        var ctx = HttpContext.TryGetTenantContext();
+        var effectiveTenantId = ctx is { TenantId: > 0 } ? ctx.TenantId : (int?)null;
+
+        var session = await _trace.TraceSessions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(s => s.SessionId == id, ct);
+
+        if (session is null || session.Status == "deleted")
+            return NotFound();
+
+        // Tenant isolation: non-master users may only continue their own tenant's sessions.
+        if (effectiveTenantId.HasValue && session.TenantId != effectiveTenantId.Value)
+            return NotFound();
+
+        if (IsRestrictedUser(ctx) && session.UserId != ctx!.UserId)
+            return NotFound();
+
+        var tenant = ctx is { TenantId: > 0 } ? ctx : TenantContext.System(session.TenantId);
+        var reactivated = await _sessions.ReactivateAsync(id, tenant, ct);
+
+        if (!reactivated)
+            _logger.LogInformation(
+                "ContinueSession: conversation memory for {SessionId} not found; chat will start a fresh session",
+                id);
+
+        return Ok(new ContinueSessionResult
+        {
+            SessionId = session.SessionId,
+            AgentId = session.AgentId,
+            AgentName = session.AgentName,
+            TurnCount = session.TotalTurns,
+            Reactivated = reactivated,
+        });
+    }
+
     /// <summary>DELETE /api/sessions/{id} — soft-delete a session.</summary>
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteSession(string id, CancellationToken ct)
     {
+        var ctx = HttpContext.TryGetTenantContext();
+        var effectiveTenantId = ctx is { TenantId: > 0 } ? ctx.TenantId : (int?)null;
+
         var session = await _trace.TraceSessions
             .FirstOrDefaultAsync(s => s.SessionId == id, ct);
         if (session is null) return NotFound();
+
+        if (effectiveTenantId.HasValue && session.TenantId != effectiveTenantId.Value)
+            return NotFound();
+
+        if (IsRestrictedUser(ctx) && session.UserId != ctx!.UserId)
+            return NotFound();
 
         session.Status = "deleted";
         await _trace.SaveChangesAsync(ct);
@@ -368,6 +498,7 @@ public class SessionsController : ControllerBase
     /// Returns { deleted: N }.
     /// </summary>
     [HttpDelete("purge")]
+    [RequireTenantAdmin]
     public async Task<IActionResult> PurgeSessions(
         [FromQuery] int olderThanDays = 30,
         [FromQuery] string? status = null,
